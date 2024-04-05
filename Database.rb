@@ -1,6 +1,3 @@
-
-#$LOAD_PATH.unshift( '/home/everest/angel_libs/ruby/mysql/16.04/' , $BASE + '/lib/ruby/mysql/16.04/' )
-
 require 'mysql2'
 
 class Database
@@ -8,7 +5,7 @@ class Database
 	VERSION = 8.0
 
 	# TO LOG DEBUG OUTPUT FOR THIS LIBRARY SET DEBUG_LEVEL TO -4
-	def initialize( username: 'root' , password: 'root-wdcfs01' , ip: '10.6.178.247' , database: 'DEBUG' , port: '3306' , table: nil )
+	def initialize( username: 'root' , password: 'root-wdcfs01' , ip: '10.220.52.10' , database: 'DEBUG' , port: '3306' , table: nil )
 
 		begin
 			@mysql = Mysql2::Client.new( :host => ip , :username => username , :password => password , :database => database , :port => port )
