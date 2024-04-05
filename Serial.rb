@@ -1,6 +1,4 @@
 
-$LOAD_PATH.unshift( '/home/everest/angel_libs/ruby/gems/' , $BASE + '/lib/ruby/gems/' )
-
 require 'io/console'
 require 'serialport'
 require 'optparse'
