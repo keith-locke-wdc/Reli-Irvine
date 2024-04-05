@@ -3,7 +3,7 @@ require 'Functions'
 
 class Workloads < Functions
 
-	VERSION = 8.41
+	VERSION = 10.1
 
 	# TO LOG DEBUG OUTPUT FOR THIS LIBRARY SET DEBUG_LEVEL TO -2
 	def initialize()
@@ -135,7 +135,7 @@ class Workloads < Functions
 	end
 
 	# Calls $angel.jedec_219_write
-	def jedec_write( min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 1000 )
+	def jedec_write( min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 1 )
 
 		if @test_info[ :test_mode ] == 'read-only' ; return ; end
 
@@ -147,7 +147,7 @@ class Workloads < Functions
 	end
 
 	# Calls $angel.jedec_219_read
-	def jedec_read( min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 1000 , compare: false )
+	def jedec_read( min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 1 , compare: false )
 
 		if compare == true
 
@@ -166,19 +166,20 @@ class Workloads < Functions
 	end
 
 	# Calls $angel.jedec_219_mixed
-	def jedec_w_r( write_percentage: 50 , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 10000 , compare: false )
+	# jedec_219_mixed loop count of 1 only does the write
+	def jedec_w_r( write_percentage: 50 , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 2 , compare: false )
 
-		if @test_info[ :test_mode ] == 'read-only' ; write_percentage = 0 ; compare = -1 ; end
-
-		compare_pattern = AngelCore::CompareMode_Full
+		if @test_info[ :test_mode ] == 'read-only' ; write_percentage = 0 ; compare = false ; end
 
 		if compare == true
 
 			f_log( [ 'DEBUG' , 'JEDEC-MIXED-C' , min_lba.to_s , max_lba.to_s , write_percentage.to_s , loop_count.to_s ] , -2 )
-		else
-			compare_pattern = -1
 
+			compare_pattern = AngelCore::CompareMode_Full
+		else
 			f_log( [ 'DEBUG' , 'JEDEC-MIXED' , min_lba.to_s , max_lba.to_s , write_percentage.to_s , loop_count.to_s ] , -2 )
+
+			compare_pattern = -1
 		end
 
 		rc = $angel.jedec_219_mixed( write_percentage , min_lba , max_lba , loop_count , @test_info[ :read_buffer_id ] , @test_info[ :write_buffer_id ] , compare_pattern )
@@ -186,7 +187,67 @@ class Workloads < Functions
 		unless rc == 0 ; force_failure( category: 'io_command_failure' , data: rc.to_s ) ; end
 	end
 
-	def timed_jedec_w( runtime: nil , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 10000 )
+	# Defaults to 16K alignment
+	def aligned_random_write( min_lba: 0 , max_lba: @drive_info[ :max_lba ] , min_block_length: 4 , max_block_length: 4 , alignment: 16384 , loop_count: 1000 )
+
+		if @test_info[ :test_mode ] == 'read-only' ; return ; end
+
+		rc = $angel.random_write( min_lba , max_lba , min_block_length , min_block_length , alignment , loop_count , @test_info[ :write_buffer_id ] )
+
+		unless rc == 0 ; force_failure( category: 'io_command_failure' , data: rc.to_s ) ; end
+	end
+
+	def aligned_random_read( min_lba: 0 , max_lba: @drive_info[ :max_lba ] , min_block_length: 4 , max_block_length: 4 , alignment: 16384 , compare: false , loop_count: 1000 )
+
+		if compare == true
+
+			write_buffer_id = @test_info[ :write_buffer_id ]
+
+			f_log( [ 'DEBUG' , 'ALIGNED-RANDOM-READ' , min_lba.to_s , max_lba.to_s , loop_count.to_s ] , -2 )
+		else
+			write_buffer_id = -1
+
+			f_log( [ 'DEBUG' , 'ALIGNED-RANDOM-READ' , min_lba.to_s , max_lba.to_s , loop_count.to_s ] , -2 )
+		end
+
+		rc = $angel.random_read( min_lba , max_lba , min_block_length , min_block_length , alignment , loop_count , @test_info[ :write_buffer_id ] , @test_info[ :read_buffer_id ] , AngelCore::CompareMode_Full )
+
+		unless rc == 0 ; force_failure( category: 'io_command_failure' , data: rc.to_s ) ; end
+	end
+
+	def aligned_random_w_r( min_lba: 0 , max_lba: @drive_info[ :max_lba ] , min_block_length: 4 , max_block_length: 4 , alignment: 16384 , compare: false , loop_count: 1000 )
+
+		if compare == true
+
+			compare_pattern = AngelCore::CompareMode_Full
+
+			f_log( [ 'DEBUG' , 'ALIGNED-RANDOM-READ' , min_lba.to_s , max_lba.to_s , loop_count.to_s ] , -2 )
+		else
+			compare_pattern = AngelCore::CompareMode_None
+
+			f_log( [ 'DEBUG' , 'ALIGNED-RANDOM-READ' , min_lba.to_s , max_lba.to_s , loop_count.to_s ] , -2 )
+		end
+
+		rc = $angel.random_write_read( min_lba , max_lba , min_block_length , max_block_length , alignment , loop_count , @test_info[ :write_buffer_id ] , @test_info[ :read_buffer_id ] , compare_pattern )
+
+		unless rc == 0 ; force_failure( category: 'io_command_failure' , data: rc.to_s ) ; end
+	end
+
+	def timed_aligned_random_w_r( runtime: nil , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , min_block_length: 4 , max_block_length: 4 , alignment: 16384 , compare: false , loop_count: 1000 )
+
+		start_time = Time.now
+
+		loop do
+
+			aligned_random_w_r( min_lba: min_lba , max_lba: max_lba , min_block_length: min_block_length , max_block_length: max_block_length , alignment: alignment , compare: compare , loop_count: loop_count )
+
+			break if Time.now >= ( start_time + runtime )
+
+			$angel.check_instruction
+		end
+	end
+
+	def timed_jedec_w( runtime: nil , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 1 )
 
 		start_time = Time.now
 
@@ -199,7 +260,7 @@ class Workloads < Functions
 		end
 	end
 
-	def timed_jedec_r( runtime: nil , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 10000 , compare: false )
+	def timed_jedec_r( runtime: nil , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 1 , compare: false )
 
 		start_time = Time.now
 
@@ -212,7 +273,7 @@ class Workloads < Functions
 		end
 	end
 
-	def timed_jedec_w_r( write_percentage: 50 , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 10000 , runtime: nil , compare: false )
+	def timed_jedec_w_r( write_percentage: 50 , min_lba: 0 , max_lba: @drive_info[ :max_lba ] , loop_count: 2 , runtime: nil , compare: false )
 
 		start_time = Time.now
 
@@ -225,31 +286,44 @@ class Workloads < Functions
 		end
 	end
 
-	def timed_jedec_219_workload( runtime: nil , write_percentage: 50 , loop_count: 100000 , compare: false , queue_depth: 32 )
+	def timed_jedec_219_workload( runtime: nil , write_percentage: 50 , loop_count: 2 , compare: false , queue_depth: 32 )
 
 		start_time = Time.now
 
 		enable_queuing( queue_depth: queue_depth , log: false )
 
-		# 50% access in 1st LBA range
-		loop_count_lba_region_0 = ( loop_count * ( 50.0 / 100 ).to_f ).to_i
-		# 30% access in 1st LBA range
-		loop_count_lba_region_1 = ( loop_count * ( 30.0 / 100 ).to_f ).to_i
-		# 20% access in 1st LBA range
-		loop_count_lba_region_2 = ( loop_count * ( 20.0 / 100 ).to_f ).to_i
-
-		region = get_random_jedec_group()
-
 		loop do
-			jedec_w_r( write_percentage: write_percentage , min_lba: region[0][0] , max_lba: region[0][1] , loop_count: loop_count_lba_region_0 , compare: compare )
+			region = get_random_jedec_group()
 
-			break if Time.now >= ( start_time + runtime )
+			# 50% access in 1st LBA range
+			1.upto( 5 ) do |loop_counter|
 
-			jedec_w_r( write_percentage: write_percentage , min_lba: region[1][0] , max_lba: region[1][1] , loop_count: loop_count_lba_region_1 , compare: compare )
+				jedec_w_r( write_percentage: write_percentage , min_lba: region[0][0] , max_lba: region[0][1] , compare: compare )
 
-			break if Time.now >= ( start_time + runtime )
+				$angel.check_instruction
 
-			jedec_w_r( write_percentage: write_percentage , min_lba: region[2][0] , max_lba: region[2][1] , loop_count: loop_count_lba_region_2 , compare: compare )
+				break if Time.now >= ( start_time + runtime )
+			end
+
+			# 30% access in 2nd LBA range
+			1.upto( 3 ) do |loop_counter|
+
+				jedec_w_r( write_percentage: write_percentage , min_lba: region[1][0] , max_lba: region[1][1] , compare: compare )
+
+				$angel.check_instruction
+
+				break if Time.now >= ( start_time + runtime )
+			end
+
+			# 20% access in 3rd LBA range
+			1.upto( 2 ) do |loop_counter|
+
+				jedec_w_r( write_percentage: write_percentage , min_lba: region[2][0] , max_lba: region[2][1] , compare: compare )
+
+				$angel.check_instruction
+
+				break if Time.now >= ( start_time + runtime )
+			end
 
 			break if Time.now >= ( start_time + runtime )
 
@@ -401,7 +475,7 @@ class Workloads < Functions
 		end
 	end
 
-	def spl_workload( pwr_5v: 3.3 , pwr_12v: 12.0 , queue_depth: 64 , spl_on: 60 , spl_off: 30 , compare: false , command_history_depth: 500 , ttp_delay: nil )
+	def spl_workload( pwr_5v: 3.3 , pwr_12v: 12.0 , queue_depth: 64 , spl_on: 60 , spl_off: 30 , compare: false , command_history_depth: 500 , ttr: nil )
 
 		unless @test_info[ :enable_power_control ] == true ; return ; end
 
@@ -485,6 +559,8 @@ class Workloads < Functions
 
 				f_log( [ 'FUNC' , 'POWER OFF' , 'UNGRACEFUL' , ctrl_id_a.to_s + ' : ' + @drive_info[ :bus_id ][0].to_s + ' & ' + ctrl_id_b.to_s + ' : ' + @drive_info[ :bus_id ][1].to_s + "\n" ] )
 			end
+
+			@test_info[ :ungraceful_power_cycle_count ] += 1
 		else
 			force_failure( category: 'unexpected_error_during_spl' , data: 'SPL_ON DURATION NOT REACHED : ' + spl_on.to_s + ' : ' + spl_on_elapsed_time.to_s )
 		end
@@ -497,12 +573,14 @@ class Workloads < Functions
 
 		unless rc == 0 ; force_failure( category: 'nvme_device_cleanup_failure' , data: rc.inspect ) ; end
 
+		@core.close_handle
+
 		loop do
 			$angel.check_instruction
 
 			if ( Time.now - spl_off_start_time ) >= spl_off
 
-				power_on( pwr_5v: pwr_5v , pwr_12v: pwr_12v , ungraceful: true )
+				power_on( pwr_5v: pwr_5v , pwr_12v: pwr_12v )
 
 				break
 			end
@@ -510,7 +588,7 @@ class Workloads < Functions
 			sleep 1
 		end
 
-		sleep ttp_delay.to_i
+		sleep ttr.to_i
 
 		if compare == true ; f_log( [ 'FUNC' , 'BLOCK-R-C' , ( command_history_depth.to_i * blocks_per_io.to_i ).to_s + "\n" ] ) ; end
 
@@ -518,7 +596,7 @@ class Workloads < Functions
 
 		unless rc == 0 ; force_failure( category: 'finish_spl_failure' , data: rc.inspect ) ; end
 
-		f_log( [ 'INFO' , 'SPL END' , 'UNSAFE SHUTDOWNS' , @drive_info[ :unsafe_shutdowns ].to_s + "\n" ] )
+		f_log( [ 'INFO' , 'SPL END' + "\n" ] )
 	end
 
 	# Performs full sequential write / read with optional compare
@@ -680,13 +758,13 @@ class Workloads < Functions
 		io_tracker( tag: 'profile_0' )
 	end
 
-	def new_tvs_workload_1( runtime: 300 , queue_depth: 32 , compare: true )
+	def rgt_workload_1( runtime: 300 , queue_depth: 32 , compare: true , dump_trace: false )
 
 		return if runtime == 0
 
 		enable_queuing( queue_depth: queue_depth , log: false )
 
-		io_tracker( tag: 'TVS-WL-1' )
+		io_tracker( tag: 'RGT-WL-1' )
 
 		start_time = Time.now
 
@@ -711,18 +789,20 @@ class Workloads < Functions
 			break if Time.now >= ( start_time + runtime )
 		end
 
-		io_tracker( tag: 'TVS-WL-1' )
+		io_tracker( tag: 'RGT-WL-1' )
 
 		disable_queuing( log: false )
+
+		if dump_trace == true ; $angel.log.dump_command_trace ; end
 	end
 
-	def new_tvs_workload_2( runtime: 300 , queue_depth: 32 , compare: true )
+	def rgt_workload_2( runtime: 300 , queue_depth: 32 , compare: true , dump_trace: false )
 
 		return if runtime == 0
 
-		enable_queuing( queue_depth: queue_depth , log: true )
+		enable_queuing( queue_depth: queue_depth , log: false )
 
-		io_tracker( tag: 'TVS-WL-2' )
+		io_tracker( tag: 'RGT-WL-2' )
 
 		start_time = Time.now
 
@@ -746,6 +826,8 @@ class Workloads < Functions
 
 			sleep 1
 
+			blocks_per_io = 1
+
 			1.upto( 500 ) do
 
 				random_lba = Random.rand( start_lba .. ( end_lba - blocks_per_io ) )
@@ -758,18 +840,20 @@ class Workloads < Functions
 			loop_counter += 1
 		end
 
-		io_tracker( tag: 'TVS-WL-2' )
+		io_tracker( tag: 'RGT-WL-2' )
 
 		disable_queuing( log: false )
+
+		if dump_trace == true ; $angel.log.dump_command_trace ; end
 	end
 
-	def new_tvs_workload_3( runtime: 300 , queue_depth: 32 , compare: true )
+	def rgt_workload_3( runtime: 300 , queue_depth: 32 , compare: true , dump_trace: false )
 
 		return if runtime == 0
 
 		enable_queuing( queue_depth: queue_depth , log: false )
 
-		io_tracker( tag: 'TVS-WL-3' )
+		io_tracker( tag: 'RGT-WL-3' )
 
 		start_time = Time.now
 
@@ -788,18 +872,20 @@ class Workloads < Functions
 			break if Time.now >= ( start_time + runtime )
 		end
 
-		io_tracker( tag: 'TVS-WL-3' )
+		io_tracker( tag: 'RGT-WL-3' )
 
 		disable_queuing( log: false )
+
+		if dump_trace == true ; $angel.log.dump_command_trace ; end
 	end
 
-	def new_tvs_workload_4( runtime: 300 , queue_depth: 32 , compare: true )
+	def rgt_workload_4( runtime: 300 , queue_depth: 32 , compare: true , dump_trace: false )
 
 		return if runtime == 0
 
 		enable_queuing( queue_depth: queue_depth , log: false )
 
-		io_tracker( tag: 'TVS-WL-4' )
+		io_tracker( tag: 'RGT-WL-4' )
 
 		start_time = Time.now
 
@@ -818,707 +904,64 @@ class Workloads < Functions
 			break if Time.now >= ( start_time + runtime )
 		end
 
-		io_tracker( tag: 'TVS-WL-4' )
+		io_tracker( tag: 'RGT-WL-4' )
 
 		disable_queuing( log: false )
+
+		if dump_trace == true ; $angel.log.dump_command_trace ; end
 	end
 
-	def new_tvs_workload_6( queue_depth: 32 )
+	def rgt_workload_6( queue_depth: 32 , dump_trace: false )
 
 		enable_queuing( queue_depth: queue_depth , log: false )
 
-		last_usable_lba = ( ( @drive_info[ :max_lba ].to_i * @drive_info[ :block_size ] ).to_i - 1000000000000 ) / @drive_info[ :block_size ]
+		last_usable_lba = ( ( ( ( @drive_info[ :max_lba ].to_i * @drive_info[ :block_size ] ).to_i - 1000000000000 ) / @drive_info[ :block_size ] ) - 1 ).to_i
 
-		start_lba = Random.rand( 0 ..( @drive_info[ :max_lba ].to_i - last_usable_lba ) )
+		start_lba = Random.rand( 0 .. last_usable_lba )
 
-		end_lba = ( start_lba + ( 1000000000000 / @drive_info[ :block_size ] ) )
+		end_lba = ( start_lba + ( 1000000000000 / @drive_info[ :block_size ] ) ).to_i
 
-		io_tracker( tag: 'TVS-WL-6-SEQ-W-1TB' )
+		io_tracker( tag: 'RGT-WL-6-SEQ-W-1TB' )
 
 		seq_w( start_lba: start_lba , end_lba: end_lba )
 
-		io_tracker( tag: 'TVS-WL-6-SEQ-W-1TB' )
+		io_tracker( tag: 'RGT-WL-6-SEQ-W-1TB' )
+
+		if dump_trace == true ; $angel.log.dump_command_trace ; end
 
 		return start_lba , end_lba
 	end
 
-	def new_tvs_workload_7( start_lba: nil , end_lba: nil , queue_depth: 32 , compare: true )
+	def rgt_workload_7( start_lba: nil , end_lba: nil , queue_depth: 32 , compare: true , dump_trace: false )
 
 		enable_queuing( queue_depth: queue_depth , log: false )
 
-		io_tracker( tag: 'TVS-WL-7-SEQ-R-C-1TB' )
+		io_tracker( tag: 'RGT-WL-7-SEQ-R-C-1TB' )
 
 		seq_r( start_lba: start_lba , end_lba: end_lba , compare: compare )
 
-		io_tracker( tag: 'TVS-WL-7-SEQ-R-C-1TB' )
+		io_tracker( tag: 'RGT-WL-7-SEQ-R-C-1TB' )
 
 		disable_queuing( log: false )
+
+		if dump_trace == true ; $angel.log.dump_command_trace ; end
 	end
 
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_01( runtime: 300 , queue_depth: 32 )
-
-		return if runtime == 0
+	def timed_seq_w( runtime: nil , queue_depth: 32 , start_lba: 0 , end_lba: @drive_info[ :max_lba ] , blocks_per_io: @test_info[ :max_blocks_per_io ] , block_count_per_loop: 10000 , end_lba_action: 'repeat' )
 
 		enable_queuing( queue_depth: queue_depth , log: false )
-
-		blocks_per_io = [ 256 , @test_info[ :max_blocks_per_io ].to_i ].min
-
-		io_tracker( tag: 'TVS-WL-01' )
 
 		start_time = Time.now
 
 		loop do
-			# set number_of_blocks to write / read , randomly between 1000 - 100000
-			number_of_blocks = Random.rand( 1000 .. 100000 )
+			if start_lba.to_i + block_count_per_loop.to_i > end_lba.to_i
 
-			# set random starting point ( 0 - ( max lba - number_of_blocks) )
-			random_lba = Random.rand( 0 .. ( $drive_info.max_lba - number_of_blocks ) )
-
-			# calculate end lba
-			end_lba = random_lba + number_of_blocks 
-
-			seq_w( start_lba: random_lba , end_lba: end_lba , blocks_per_io: blocks_per_io )
-
-			break if Time.now >= ( start_time + runtime )
-
-			seq_r( start_lba: random_lba , end_lba: end_lba , blocks_per_io: blocks_per_io , compare: false )
-
-			break if Time.now >= ( start_time + runtime )
-		end
-
-		io_tracker( tag: 'TVS-WL-01' )
-
-		disable_queuing( log: false )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_02( runtime: 300 , queue_depth: 32 )
-
-		return if runtime == 0
-
-		enable_queuing( queue_depth: queue_depth , log: false )
-
-		io_tracker( tag: 'TVS-WL-02' )
-
-		start_time = Time.now
-
-		counter = 0
-
-		loop do
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'MAIN LOOP' , counter.to_s ] , -2 )
-
-			if counter.even? == true
-				# set blocks_per_io ( block length per command ) to max
-				blocks_per_io = @test_info[ :max_blocks_per_io ]
-			else
-				# set blocks_per_io , randomly between 1 - max
-				blocks_per_io = Random.rand( 1 .. @test_info[ :max_blocks_per_io ] )
+				if end_lba_action == 'repeat' ; start_lba = 0 ; else ; break ; end
 			end
 
-			# set number_of_blocks to write / read , randomly between 1000 - 100000
-			number_of_blocks = Random.rand( 1000 .. 100000 )
-	
-			# set random starting point ( 0 - ( max lba - number_of_blocks) )
-			random_lba = Random.rand( 0 .. ( $drive_info.max_lba - number_of_blocks ) )
+			seq_w( start_lba: start_lba , end_lba: start_lba + block_count_per_loop , blocks_per_io: blocks_per_io )
 
-			# calculate end lba
-			end_lba = random_lba + number_of_blocks
-
-			seq_w( start_lba: random_lba , end_lba: end_lba , blocks_per_io: blocks_per_io )
-
-			break if Time.now >= ( start_time + runtime )
-
-			# DELAY TO ALLOW WRITES TO COMPLETE
-			sleep 1
-
-			seq_r( start_lba: random_lba , end_lba: end_lba , blocks_per_io: blocks_per_io , compare: true )
-
-			break if Time.now >= ( start_time + runtime )
-
-			counter += 1
-		end
-
-		io_tracker( tag: 'TVS-WL-02' )
-
-		disable_queuing( log: false )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_03( runtime: 300 , sleep: 10 , ttr: 0 , queue_depth: 32 )
-
-		return if runtime == 0
-
-		enable_queuing( queue_depth: queue_depth , log: false )
-
-		io_tracker( tag: 'TVS-WL-03' )
-
-		counter = 0
-
-		main_timed_loop_start_time = Time.now
-
-		loop do
-			counter += 1
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'MAIN LOOP ' + counter.to_s ] , -2 )
-
-			# set blocks_per_io to max
-			blocks_per_io = @test_info[ :max_blocks_per_io ]
-
-			# set number_of_blocks to write / read , randomly between 1000 - 100000
-			number_of_blocks = Random.rand( 1000 .. 100000 )
-
-			# set random starting point ( 0 - ( max lba - number_of_blocks) )
-			start_lba = Random.rand( 0 .. ( $drive_info.max_lba - number_of_blocks ) )
-
-			# calculate end lba
-			end_lba = start_lba + number_of_blocks
-
-			# perform sequential write
-			seq_w( start_lba: start_lba , end_lba: end_lba , blocks_per_io: blocks_per_io )
-
-			# DELAY TO ALLOW WRITES TO COMPLETE
-			sleep 1
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			( 1 ).upto( 1000 ) do
-
-				_blocks_per_io = 1
-
-				_random_lba_in_range = Random.rand( start_lba .. ( end_lba - _blocks_per_io - 1 ) )
-
-				# read / compare data
-				block_r( lba: _random_lba_in_range , blocks_per_io: _blocks_per_io , compare: true )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			timed_loop2_start = Time.now
-
-			# perform timed loop 2
-			loop do
-				max_blocks_per_io = Random.rand( 1 .. @test_info[ :max_blocks_per_io ] )
-
-				io_data = _get_random_lba_in_range_and_random_blocks_per_io( start_lba: start_lba , end_lba: end_lba , max_blocks_per_io: max_blocks_per_io )
-
-				random_lba_in_range = io_data[0]
-
-				blocks_per_io = io_data[1]
-
-				block_w( lba: random_lba_in_range , blocks_per_io: blocks_per_io )
-
-				break if ( Time.now >= ( timed_loop2_start + ( runtime / 10 ) ) ) || ( Time.now >= ( main_timed_loop_start_time + runtime ) )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			( 1 ).upto( 5 ) do
-
-				power_cycle( pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			# sequential read / compare
-			seq_r( start_lba: start_lba , end_lba: end_lba , blocks_per_io: @test_info[ :max_blocks_per_io ] , compare: true )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-		end
-
-		io_tracker( tag: 'TVS-WL-03' )
-
-		disable_queuing( log: false )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_04( runtime: 300 , queue_depth: 32 )
-
-		return if runtime == 0
-
-		enable_queuing( queue_depth: queue_depth , log: false )
-
-		io_tracker( tag: 'TVS-WL-04' )
-
-		band1_min_lba = 0
-		band1_max_lba = $drive_info.max_lba / 4
-
-		f_log( [ 'INFO' , 'BAND 1' , 'START' , band1_min_lba.to_s ] , 2 )
-		f_log( [ 'INFO' , 'BAND 1' , 'END' , band1_max_lba.to_s ] , 2 )
-
-		band2_min_lba = ( $drive_info.max_lba / 4 ) + 1
-		band2_max_lba = $drive_info.max_lba / 2
-
-		f_log( [ 'INFO' , 'BAND 2' , 'START' , band2_min_lba.to_s ] , 2 )
-		f_log( [ 'INFO' , 'BAND 2' , 'END' , band2_max_lba.to_s ] , 2 )
-
-		band3_min_lba = ( $drive_info.max_lba / 2 ) + 1
-		band3_max_lba = ( $drive_info.max_lba / 4 ) * 3
-
-		f_log( [ 'INFO' , 'BAND 3' , 'START' + band3_min_lba.to_s ] , 2 )
-		f_log( [ 'INFO' , 'BAND 3' , 'END' , band3_max_lba.to_s ] , 2 )
-
-		band4_min_lba = ( ( $drive_info.max_lba / 4 ) * 3 ) + 1
-		band4_max_lba = $drive_info.max_lba
-
-		f_log( [ 'INFO' , 'BAND 4' , 'START' , band4_min_lba.to_s ] , 2 )
-		f_log( [ 'INFO' , 'BAND 4' , 'END' , band4_max_lba.to_s ] , 2 )
-
-		main_timed_loop_start_time = Time.now
-
-		_max_block_tx_size = [ 512 , @test_info[ :max_blocks_per_io ].to_i ].min
-
-		loop do
-			# set blocks_per_io , randomly between 1 - 512
-			blocks_per_io_band1 = Random.rand( 1 .. _max_block_tx_size )
-			blocks_per_io_band2 = Random.rand( 1 .. _max_block_tx_size )
-			blocks_per_io_band3 = Random.rand( 1 .. _max_block_tx_size )
-			blocks_per_io_band4 = Random.rand( 1 .. _max_block_tx_size )
-
-			number_of_blocks = 512
-
-			# set random starting point ( band_start - ( band_end - number_of_blocks) )
-			start_lba_band1 = Random.rand( band1_min_lba .. ( band1_max_lba - number_of_blocks ) )
-			start_lba_band2 = Random.rand( band2_min_lba .. ( band2_max_lba - number_of_blocks ) )
-			start_lba_band3 = Random.rand( band3_min_lba .. ( band3_max_lba - number_of_blocks ) )
-			start_lba_band4 = Random.rand( band4_min_lba .. ( band4_max_lba - number_of_blocks ) )
-
-			# set band end point
-			end_lba_band1 = start_lba_band1 + number_of_blocks
-			end_lba_band2 = start_lba_band2 + number_of_blocks
-			end_lba_band3 = start_lba_band3 + number_of_blocks
-			end_lba_band4 = start_lba_band4 + number_of_blocks
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'SECTION 1' ] , -2 )
-
-			# perform sequential writes in sub-bands
-			seq_w( start_lba: start_lba_band1 , end_lba: end_lba_band1 , blocks_per_io: blocks_per_io_band1 )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			seq_w( start_lba: start_lba_band2 , end_lba: end_lba_band2 , blocks_per_io: blocks_per_io_band2 )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			seq_w( start_lba: start_lba_band3 , end_lba: end_lba_band3 , blocks_per_io: blocks_per_io_band3 )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			seq_w( start_lba: start_lba_band4 , end_lba: end_lba_band4 , blocks_per_io: blocks_per_io_band4 )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'SECTION 2' ] , -2 )
-
-			# perform 500 random block reads, no compare ( 0 .. ( $drive_info.max_lba - blocks_per_io ) )
-			( 500 ).downto( 1 ) do
-
-				max_blocks_per_io = Random.rand( 1 .. @test_info[ :max_blocks_per_io ] )
-
-				io_data = _get_random_lba_in_range_and_random_blocks_per_io( start_lba: 0 , end_lba: $drive_info.max_lba , max_blocks_per_io: max_blocks_per_io )
-
-				random_lba_in_range = io_data[0]
-
-				blocks_per_io = io_data[1]
-
-				block_r( lba: random_lba_in_range , blocks_per_io: blocks_per_io , compare: false )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'SECTION 3' ] , -2 )
-
-			# perform 100 sequential read / compare of bands
-			( 100 ).downto( 1 ) do
-
-				seq_r( start_lba: start_lba_band1 , end_lba: end_lba_band1 , blocks_per_io: _max_block_tx_size , compare: true )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-				seq_r( start_lba: start_lba_band2 , end_lba: end_lba_band2 , blocks_per_io: _max_block_tx_size , compare: true )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-				seq_r( start_lba: start_lba_band3 , end_lba: end_lba_band3 , blocks_per_io: _max_block_tx_size , compare: true )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-				seq_r( start_lba: start_lba_band4 , end_lba: end_lba_band4 , blocks_per_io: _max_block_tx_size , compare: true )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-		end
-
-		io_tracker( tag: 'TVS-WL-04' )
-
-		disable_queuing( log: false )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_05( runtime: 300 , queue_depth: 32 )
-
-		return if runtime == 0
-
-		enable_queuing( queue_depth: queue_depth , log: false )
-
-		io_tracker( tag: 'TVS-WL-05' )
-
-		main_timed_loop_start_time = Time.now
-
-		counter = 0
-
-		loop do
-			counter += 1
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'MAIN TIMED LOOP' , counter.to_s ] , -2 )
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'COUNT LOOP 1' ] , -2 )
-
-			# perform write / read / compare of 500 random lbas with defined block transfer sizes
-			# Odd main loop iterations will use random block_transfer size , even main loop iterations will use max blocks_per_io
-			( 500 ).downto( 1 ) do |x|
-
-				if counter.even? == true
-					max_blocks_per_io = @test_info[ :max_blocks_per_io ]
-				else
-					max_blocks_per_io = Random.rand( 1 .. @test_info[ :max_blocks_per_io ] )
-				end
-
-				io_data = _get_random_lba_in_range_and_random_blocks_per_io( start_lba: 0 , end_lba: $drive_info.max_lba , max_blocks_per_io: max_blocks_per_io )
-
-				random_lba_in_range = io_data[0]
-
-				blocks_per_io = io_data[1]
-
-				block_w( lba: random_lba_in_range , blocks_per_io: blocks_per_io )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-				# DELAY TO ALLOW WRITES TO COMPLETE
-				sleep 1
-
-				block_r( lba: random_lba_in_range , blocks_per_io: blocks_per_io , compare: true )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			io_data = _get_random_lba_in_range_and_random_blocks_per_io( start_lba: 0 , end_lba: $drive_info.max_lba , max_blocks_per_io: @test_info[ :max_blocks_per_io ] )
-
-			random_lba_in_range = io_data[0]
-
-			blocks_per_io = io_data[1]
-
-			# perform read at random lba with max block transfer size , no compare
-			block_r( lba: random_lba_in_range , blocks_per_io: blocks_per_io , compare: false )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-		end
-
-		io_tracker( tag: 'TVS-WL-05' )
-
-		disable_queuing( log: false )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_06( runtime: 300 , queue_depth: 32 )
-
-		return if runtime == 0
-
-		enable_queuing( queue_depth: queue_depth , log: false )
-
-		io_tracker( tag: 'TVS-WL-06' )
-
-		counter = 0
-
-		main_timed_loop_start_time = Time.now
-
-		loop do
-			counter += 1
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'MAIN TIMED LOOP' , counter.to_s ] , -2 )
-
-			( 1 ).upto( 1000 ) do |x|
-
-				f_log( [ 'DEBUG' , __method__.to_s.upcase , 'COUNT LOOP ' + x.to_s ] , -2 )
-
-				max_blocks_per_io = 1
-
-				io_data = _get_random_lba_in_range_and_random_blocks_per_io( start_lba: 0 , end_lba: $drive_info.max_lba , max_blocks_per_io: max_blocks_per_io )
-
-				random_lba_in_range = io_data[0]
-
-				blocks_per_io = io_data[1]
-
-				# perform 1 block device write at random lba
-				block_w( lba: random_lba_in_range , blocks_per_io: blocks_per_io )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			if counter.even? == true
-
-				blocks_per_io = Random.rand( 1 .. @test_info[ :max_blocks_per_io ] )
-			else
-				blocks_per_io = @test_info[ :max_blocks_per_io ]
-			end
-
-			# set number_of_blocks to read , randomly between 1000 - 100000
-			number_of_blocks = Random.rand( 1000 .. 100000 )
-
-			lba = Random.rand( 0 .. ( $drive_info.max_lba - number_of_blocks ) )
-
-			end_lba = lba + number_of_blocks
-
-			loop do
-				block_r( lba: lba , blocks_per_io: blocks_per_io , compare: false )
-
-				lba = lba + blocks_per_io
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime ) || lba + blocks_per_io > end_lba
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-		end
-
-		io_tracker( tag: 'TVS-WL-06' )
-
-		disable_queuing( log: false )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_07( runtime: 300 , queue_depth: 32 )
-
-		return if runtime == 0
-
-		enable_queuing( queue_depth: queue_depth , log: false )
-
-		io_tracker( tag: 'TVS-WL-07' )
-
-		main_timed_loop_start_time = Time.now
-
-		loop do
-			# set random block transfer size
-			blocks_per_io = Random.rand( 1 .. @test_info[ :max_blocks_per_io ] )
-
-			# set number_of_blocks to write / read , randomly between 1000 - 100000
-			number_of_blocks = Random.rand( 1000 .. 100000 )
-
-			# set random starting point ( 0 - ( max lba - number_of_blocks) )
-			start_lba = Random.rand( 0 .. ( $drive_info.max_lba - number_of_blocks ) )
-
-			# calculate end lba
-			end_lba = start_lba + number_of_blocks 
-
-			seq_w( start_lba: start_lba , end_lba: end_lba , blocks_per_io: blocks_per_io )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			# DELAY TO ALLOW WRITES TO COMPLETE
-			sleep 1
-
-			( 1 ).upto( 1000 ) do
-
-				_blocks_per_io = 1
-
-				_random_lba_in_range = Random.rand( start_lba .. ( end_lba - _blocks_per_io ) )
-
-				# perform block read / compare in lba range written
-				block_r( lba: _random_lba_in_range , blocks_per_io: _blocks_per_io , compare: true )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-		end
-
-		io_tracker( tag: 'TVS-WL-07' )
-
-		disable_queuing( log: false )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_08( runtime: 300 , queue_depth: 32 )
-
-		return if runtime == 0
-
-		enable_queuing( queue_depth: queue_depth , log: false )
-
-		io_tracker( tag: 'TVS-WL-08' )
-
-		counter = 0
-
-		main_timed_loop_start_time = Time.now
-
-		loop do
-			counter += 1
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'MAIN LOOP' , counter.to_s ] , -2 )
-
-			if @test_info[ :max_blocks_per_io ] < 128
-
-				max_blocks_per_io = @test_info[ :max_blocks_per_io ]
-			else
-				max_blocks_per_io = 128
-			end
-
-			io_data = _get_random_lba_in_range_and_random_blocks_per_io( start_lba: 0 , end_lba: $drive_info.max_lba , max_blocks_per_io: max_blocks_per_io )
-
-			random_lba_in_range = io_data[0]
-
-			blocks_per_io = io_data[1]
-
-			# perform block write with a block transfer size of 128 at random lba
-			block_w( lba: random_lba_in_range , blocks_per_io: blocks_per_io )
-
-			# DELAY TO ALLOW WRITES TO COMPLETE
-			sleep 1
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'COUNT LOOP 1' ] , -2 )
-
-			( 6 ).downto( 1 ) do |x|
-
-				f_log( [ 'DEBUG' , __method__.to_s.upcase , 'COUNT LOOP 1' , x.to_s ] , -2 )
-
-				# set random block transfer size
-				_blocks_per_io = Random.rand( 1 .. @test_info[ :max_blocks_per_io ] )
-
-				io_data = _get_random_lba_in_range_and_random_blocks_per_io( start_lba: 0 , end_lba: $drive_info.max_lba , max_blocks_per_io: _blocks_per_io )
-
-				_random_lba_in_range = io_data[0]
-
-				_blocks_per_io = io_data[1]
-
-				# perform block read , no compare
-				block_r( lba: _random_lba_in_range , blocks_per_io: _blocks_per_io , compare: false )
-
-				break if Time.now >= ( main_timed_loop_start_time + runtime )
-			end
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-
-			# perform block read with a block transfer size of 128 with compare of data previously written
-			block_r( lba: random_lba_in_range , blocks_per_io: blocks_per_io , compare: true )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-		end
-
-		io_tracker( tag: 'TVS-WL-08' )
-
-		disable_queuing( log: false )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_workload_09( runtime: 300 , write_percentage: 60 , start_lba: 0 , end_lba: $drive_info.max_lba , loop_count: 100 )
-
-		return if runtime == 0
-
-		io_tracker( tag: 'TVS-WL-09' )
-
-		counter = 0
-
-		main_timed_loop_start_time = Time.now
-
-		loop do
-			counter += 1
-
-			f_log( [ 'DEBUG' , __method__.to_s.upcase , 'MAIN LOOP' , counter.to_s ] , -2 )
-
-			jedec_w_r( write_percentage: write_percentage , min_lba: start_lba , max_lba: end_lba , loop_count: loop_count )
-
-			break if Time.now >= ( main_timed_loop_start_time + runtime )
-		end
-
-		io_tracker( tag: 'TVS-WL-09' )
-	end
-
-	# Calls Functions::power_cycle 'count' times
-	# @return nil
-	def tvs_power_cycle( count: 5 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: 10 , ttr: 0 , unsafe: false )
-
-		return if count == 0
-
-		( count ).downto( 1 ) do ; power_cycle( pwr_5v: pwr_5v , pwr_12v: pwr_12v , sleep: sleep , ttr: ttr , unsafe: unsafe ) ; end
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_io_soak( runtime_wl01: 3600 , runtime_wl02: 720 , runtime_wl03: 1800 , runtime_wl04: 720 , runtime_wl05: 720 , pc_01: 5 , runtime_wl06: 720 , runtime_wl07: 720 , pc_02: 5 , runtime_wl08: 3600 , pc_03: 10 , sleep: 10 , ttr: 0 )
-
-		io_tracker( tag: 'TVS-IO-SOAK' )
-
-		tvs_workload_01( runtime: runtime_wl01 )
-		tvs_workload_02( runtime: runtime_wl02 )
-		tvs_workload_03( runtime: runtime_wl03 , ttr: ttr )
-		tvs_workload_04( runtime: runtime_wl04 )
-		tvs_workload_05( runtime: runtime_wl05 )
-		tvs_power_cycle( count: pc_01 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr , unsafe: true )
-		tvs_workload_06( runtime: runtime_wl06 )
-		tvs_workload_07( runtime: runtime_wl07 )
-		tvs_power_cycle( count: pc_02 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr , unsafe: true )
-		tvs_workload_08( runtime: runtime_wl08 )
-		tvs_power_cycle( count: pc_03 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr , unsafe: false )
-
-		io_tracker( tag: 'TVS-IO-SOAK' )
-	end
-
-	# See PTL Workloads flowchart for details
-	# @return nil
-	def tvs_io_ramp( runtime_wl08: 300 , pc_01: 2 , runtime_wl06: 300 , pc_02: 2 , runtime_wl07: 300 , pc_03: 2 , runtime_wl09: 300 , pc_04: 5 , runtime_wl03: 1200 , pc_05: 2 , runtime_wl05: 300 , sleep: 10 , ttr: 0 )
-
-		io_tracker( tag: 'TVS-IO-RAMP' )
-
-		tvs_workload_08( runtime: runtime_wl08 )
-		tvs_power_cycle( count: pc_01 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr )
-		tvs_workload_06( runtime: runtime_wl06 )
-		tvs_power_cycle( count: pc_02 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr )
-		tvs_workload_07( runtime: runtime_wl07 )
-		tvs_power_cycle( count: pc_03 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr )
-		tvs_workload_09( runtime: runtime_wl09 )
-		tvs_power_cycle( count: pc_04 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr )
-		tvs_workload_03( runtime: runtime_wl03 , ttr: ttr )
-		tvs_power_cycle( count: pc_05 , pwr_5v: $power.get_5v_setting , pwr_12v: $power.get_12v_setting , sleep: sleep , ttr: ttr )
-		tvs_workload_05( runtime: runtime_wl05 )
-
-		io_tracker( tag: 'TVS-IO-RAMP' )
-	end
-
-	def timed_seq_w( runtime: nil , queue_depth: 64 , start_lba: 0 , blocks_per_io: @test_info[ :max_blocks_per_io ] , end_lba_action: 'repeat' )
-
-		enable_queuing( queue_depth: queue_depth , log: false )
-
-		block_count = 1000
-
-		start_time = Time.now
-
-		loop do
-			if start_lba + block_count > @drive_info[ :max_lba ] && end_lba_action == 'repeat' ; start_lba = 0 ; else ; break ; end
-
-			seq_w( start_lba: start_lba , end_lba: start_lba + block_count , blocks_per_io: blocks_per_io )
-
-			start_lba = start_lba + block_count
+			start_lba = start_lba + block_count_per_loop
 
 			break if Time.now >= ( start_time + runtime )
 
@@ -1528,20 +971,21 @@ class Workloads < Functions
 		disable_queuing( log: false )
 	end
 
-	def timed_seq_r( runtime: nil , queue_depth: 64 , start_lba: 0 , blocks_per_io: @test_info[ :max_blocks_per_io ] , compare: false , end_lba_action: 'repeat' )
+	def timed_seq_r( runtime: nil , queue_depth: 32 , start_lba: 0 , end_lba: @drive_info[ :max_lba ] , blocks_per_io: @test_info[ :max_blocks_per_io ] , block_count_per_loop: 10000 , end_lba_action: 'repeat' , compare: false )
 
 		enable_queuing( queue_depth: queue_depth , log: false )
-
-		block_count = 1000
 
 		start_time = Time.now
 
 		loop do
-			if start_lba + block_count > @drive_info[ :max_lba ] && end_lba_action == 'repeat' ; start_lba = 0 ; else ; break ; end
+			if start_lba.to_i + block_count_per_loop.to_i > end_lba.to_i
 
-			seq_r( start_lba: start_lba , end_lba: start_lba + block_count , blocks_per_io: blocks_per_io , compare: compare )
+				if end_lba_action == 'repeat' ; start_lba = 0 ; else ; break ; end
+			end
 
-			start_lba = start_lba + block_count
+			seq_r( start_lba: start_lba , end_lba: start_lba + block_count_per_loop , blocks_per_io: blocks_per_io , compare: compare )
+
+			start_lba = start_lba + block_count_per_loop
 
 			break if Time.now >= ( start_time + runtime )
 
@@ -1551,25 +995,26 @@ class Workloads < Functions
 		disable_queuing( log: false )
 	end
 
-	def timed_seq_w_r( runtime: nil , queue_depth: 32 , compare: true , start_lba: 0 , blocks_per_io: @test_info[ :max_blocks_per_io ] , end_lba_action: 'repeat' )
+	def timed_seq_w_r( runtime: nil , queue_depth: 32 , start_lba: 0 , end_lba: @drive_info[ :max_lba ] , blocks_per_io: @test_info[ :max_blocks_per_io ] , block_count_per_loop: 10000 , end_lba_action: 'repeat' , compare: true )
 
 		enable_queuing( queue_depth: queue_depth , log: false )
-
-		block_count = 10000
 
 		start_time = Time.now
 
 		loop do
-			if start_lba + block_count > @drive_info[ :max_lba ] && end_lba_action == 'repeat' ; start_lba = 0 ; end
+			if start_lba.to_i + block_count_per_loop.to_i > end_lba.to_i
 
-			seq_w( start_lba: start_lba , end_lba: start_lba + block_count , blocks_per_io: blocks_per_io )
+				if end_lba_action == 'repeat' ; start_lba = 0 ; else ; break ; end
+			end
+
+			seq_w( start_lba: start_lba , end_lba: start_lba + block_count_per_loop , blocks_per_io: blocks_per_io )
 
 			# DELAY TO ALLOW WRITES TO COMPLETE
 			sleep 1
 
-			seq_r( start_lba: start_lba , end_lba: start_lba + block_count , blocks_per_io: blocks_per_io , compare: compare )
+			seq_r( start_lba: start_lba , end_lba: start_lba + block_count_per_loop , blocks_per_io: blocks_per_io , compare: compare )
 
-			start_lba = start_lba + block_count
+			start_lba = start_lba + block_count_per_loop
 
 			break if Time.now >= ( start_time + runtime )
 
@@ -1585,7 +1030,7 @@ class Workloads < Functions
 
 		f_log( [ 'INFO' , 'BASELINE START' + "\n" ] )
 
-		inspector_upload()
+		upload_baseline_csv()
 
 		1.upto( 15 ) do |counter|
 
@@ -1609,7 +1054,7 @@ class Workloads < Functions
 			sync( type: 'drives' )
 		end
 
-		inspector_upload()
+		upload_baseline_csv()
 
 		sync( type: 'drives' )
 
@@ -1635,14 +1080,14 @@ class Workloads < Functions
 			sync( type: 'drives' )
 		end
 
-		inspector_upload()
+		upload_baseline_csv()
 
 		baseline_workload( workload: 11 )
 		baseline_workload( workload: 12 )
 
-		sync( type: 'drives' )
+		upload_baseline_csv( details: 'PASSED' )
 
-		inspector_upload()
+		sync( type: 'drives' )
 
 		f_log( [ 'INFO' , 'BASELINE END' + "\n" ] )
 	end
@@ -1807,11 +1252,11 @@ class Workloads < Functions
 		start_time = Time.now
 
 		loop do
-			seq_w_r( start_lba: start_lba , end_lba: start_lba + 1000 , blocks_per_io: blocks_per_io , compare: compare )
+			seq_w_r( start_lba: start_lba.to_i , end_lba: ( start_lba + 1000 ).to_i , blocks_per_io: blocks_per_io , compare: compare )
 
 			start_lba = start_lba + 1000
 
-			if start_lba >= @drive_info[ :max_lba ] || Time.now >= ( start_time + runtime ) ; break ; end
+			if ( start_lba.to_i + 1000 ).to_i >= @drive_info[ :max_lba ].to_i || Time.now >= ( start_time + runtime ) ; break ; end
 		end
 
 		io_tracker( tag: 'BASELINE-WL-1' )
