@@ -1,5 +1,5 @@
 
-VERSION = 2.2
+VERSION = 2.5
 
 def _spl_power_cycles( power_cycle_count: nil , voltage_5v: 3.3 , voltage_12v: 12.0 , compare: true , ttr: 0 )
 
@@ -55,8 +55,6 @@ end
 
 def pre()
 
-	$ANGEL.sync( type: 'drives' )
-
 	$ANGEL.precondition( set_temp: 25 )
 
 	$ANGEL.baseline()
@@ -66,7 +64,11 @@ end
 
 def start_test_phase( hash )
 
-	if	hash[ :phase ] == 'ramp'
+	if	hash[ :phase ] == 'precondition'
+
+		pre()
+
+	elsif	hash[ :phase ] == 'ramp'
 
 		$ANGEL.set_chamber_temp( temp: hash[ :temp ] , time_limit: hash[ :ramp_time ] , sync: true )
 
@@ -96,7 +98,7 @@ def main()
 
 	# USER DEFINED - DRIVE SPECIFIC - START
 
-	start_loop = 4
+	start_loop = 0
 
 	drive_spec_temp_low = 0
 
@@ -150,10 +152,9 @@ def main()
 
 	$ANGEL.log()
 
-	pre()
-
 	test_data = []
 
+	test_data[ 0  ] = { :phase => 'precondition' , ttr: ttr , :safe_pc_count => 0 , :unsafe_pc_count => 0 }
 	test_data[ 1  ] = { :phase => 'soak' , :safe_pc_count => 350 , :unsafe_pc_count => 350 , :voltage_5v => voltage_5v_nominal , :voltage_12v => voltage_12v_nominal, :temp => chamber_temp_ambient	, ttr: ttr }
 	test_data[ 2  ] = { :phase => 'soak' , :safe_pc_count => 350 , :unsafe_pc_count => 350 , :voltage_5v => voltage_5v_high    , :voltage_12v => voltage_12v_high	, :temp => chamber_temp_ambient	, ttr: ttr }
 	test_data[ 3  ] = { :phase => 'soak' , :safe_pc_count => 350 , :unsafe_pc_count => 350 , :voltage_5v => voltage_5v_low	   , :voltage_12v => voltage_12v_low	, :temp => chamber_temp_ambient	, ttr: ttr }

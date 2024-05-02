@@ -1,5 +1,5 @@
 
-VERSION = 3.1
+VERSION = 3.3
 
 def pre( pwr_5v_nominal: nil , pwr_5v_high: nil , pwr_5v_low: nil , pwr_12v_nominal: nil , pwr_12v_high: nil , pwr_12v_low: nil , temp: nil , ramp_time: nil , ttr: 0 )
 
@@ -108,7 +108,7 @@ def main()
 	runtime = 1000
 
 	# jedec or random ( for 16K UI )
-	workload = 'random'
+	workload = 'jedec'
 
 	drive_spec_temp_low = 0
 

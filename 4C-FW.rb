@@ -1,26 +1,26 @@
 
-VERSION = 10.5
+VERSION = 10.7
 
 def firmware_downloads( firmware_download_count , ttr )
 
 	1.upto( firmware_download_count ) do
 
-		if	@firmware_download_count.odd?
+		if	@firmware_download_count.even?
 
 			if @download_method == 'angel'
 			
-				$ANGEL.firmware_download( firmware: @firmware_1 , firmware_slot: 1 , power_cycle: false , commit_action: 3 )
+				$ANGEL.firmware_download( firmware: @firmware_1 , power_cycle: false , commit_action: 3 )
 			else
-				$ANGEL.firmware_download_nvme_cli( firmware: @firmware_1 , firmware_slot: 1 , power_cycle: false , commit_action: 3 )
+				$ANGEL.firmware_download_nvme_cli( firmware: @firmware_1 , power_cycle: false , commit_action: 3 )
 			end
 
-		elsif	@firmware_download_count.even?
+		elsif	@firmware_download_count.odd?
 
 			if @download_method == 'angel'
 
-				$ANGEL.firmware_download( firmware: @firmware_2 , firmware_slot: 1 , power_cycle: false , commit_action: 3 )
+				$ANGEL.firmware_download( firmware: @firmware_2 , power_cycle: false , commit_action: 3 )
 			else
-				$ANGEL.firmware_download_nvme_cli( firmware: @firmware_2 , firmware_slot: 1 , power_cycle: false , commit_action: 3 )
+				$ANGEL.firmware_download_nvme_cli( firmware: @firmware_2 , power_cycle: false , commit_action: 3 )
 			end
 		end
 
@@ -97,8 +97,8 @@ def main()
 
 	start_loop = 0
 
-	@firmware_1 = 'MC104003'
-	@firmware_2 = 'MC104004'
+	@firmware_1 = 'LC704003'
+	@firmware_2 = 'LC704004'
 
 	# angel ( sends custom nvme commands via library ) or nvme-cli ( uses nvme-cli )
 	@download_method = 'angel'
@@ -181,8 +181,6 @@ def main()
 	test_data[ 19 ] = { :phase => 'soak' , :download_count => 100 , :voltage_5v => voltage_5v_low	  , :voltage_12v => voltage_12v_low	, :ttr => ttr }
 	test_data[ 20 ] = { :phase => 'ramp' , :download_count => 40  , :voltage_5v => voltage_5v_nominal , :voltage_12v => voltage_12v_nominal	, :ramp_time => ramp_time_5 , :temp => chamber_temp_ambient , :ttr => ttr }
 	test_data[ 21 ] = { :phase => 'post' , :download_count => 0 , :temp => chamber_temp_ambient }
-
-	$ANGEL.sync( type: 'drives' )
 
 	start_loop.upto( ( test_data.count - 1 ) ) do |loop_counter|
 
