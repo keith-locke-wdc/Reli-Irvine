@@ -1,0 +1,160 @@
+
+# @note $fw_repo sets the path to firmware & DictArchive.zip files
+# @note @lib_path sets the location of the the Reli Angel Libraries
+# @note @options are user configurable test options
+class Precheck
+
+	VERSION = 13.5
+
+	# Location of Firmware & DictArchive.zip files
+	$fw_repo = '/home/everest/angel_fw_repo/'
+
+	# Location of PTL libs
+	@lib_path = '/home/everest/angel_libs/'
+
+	@options = { test_phase: 'DEBUG' , enable_inspector_uploads: false }
+
+	private
+
+	def self.log( text )
+
+		timeStamp = Time.now.strftime( "%Y-%m-%d %H:%M:%S : --- --- : " )
+
+		$angel.log.write_file( $test_info.home_directory.to_s + 'script-trace.log' , timeStamp + text + "\n" , 'a' )
+	end
+
+	# Copies PTL Angel libraries to the $test_info.home_directory & instructs Angel to use those files
+	# The PTL precheck.rb initializes the global variable $ANGEL, which can be used to call any of the PTL library functions
+	def self.precheck
+
+		unless $fw_repo[-1] == '/' ; $fw_repo += '/' ; end
+
+		unless @lib_path[-1] == '/' ; @lib_path += '/' ; end
+
+		FileUtils.touch( $test_info.home_directory.to_s + 'script-trace.log' )
+
+		text = 'DATE       TIME     : TMP SSD : TYPE  : ATTRIBUTE            : DATA-1               : DATA-2               : DATA-3' + "\n"
+
+		$angel.log.write_file( $test_info.home_directory.to_s + 'script-trace.log' , text + "\n" , 'a' )
+
+		pwd = Dir.pwd
+
+                # Copy precheck.rb to the test home directory
+                FileUtils.copy( __FILE__ , $test_info.home_directory.to_s )
+
+                angel_libs = %w{ Database.rb  Functions.rb  Serial.rb  Workloads.rb }
+
+                angel_libs.each do |file|
+
+			begin
+				FileUtils.cp_r( @lib_path.to_s + file.to_s , $test_info.home_directory.to_s )
+
+			rescue Exception => error
+
+				$angel.log.write_file( $test_info.home_directory.to_s + 'script-trace.log' , error.to_s + "\n" , 'a' )
+
+				$angel.test_end( 'Failed' )
+			end
+                end
+
+		config_files = [ 'device-id-list.yaml' , 'customer-id-list.yaml' ]
+
+		config_files.each do |file|
+
+			begin
+				FileUtils.copy( '/home/everest/angel_config_files/' + file.to_s , $test_info.home_directory.to_s )
+
+			rescue Exception => error
+
+				$angel.log.write_file( $test_info.home_directory.to_s + 'script-trace.log' , error.to_s + "\n" , 'a' )
+
+				$angel.test_end( 'Failed' )
+			end
+		end
+
+		angel_rbin_files = Dir[ '/home/everest/angel_rbin/*' ]
+
+		angel_rbin_files.each do |file|
+
+			begin
+				FileUtils.copy( file.to_s , $test_info.home_directory.to_s )
+
+			rescue Exception => error
+
+				$angel.log.write_file( $test_info.home_directory.to_s + 'script-trace.log' , error.to_s + "\n" , 'a' )
+
+				$angel.test_end( 'Failed' )
+			end
+		end
+
+		angel_bin_files = Dir[ '/home/everest/angel_bin/*' ]
+
+		angel_bin_files.each do |file|
+
+			begin
+				FileUtils.copy( file.to_s , $test_info.home_directory.to_s )
+
+			rescue Exception => error
+
+				$angel.log.write_file( $test_info.home_directory.to_s + 'script-trace.log' , error.to_s + "\n" , 'a' )
+
+				$angel.test_end( 'Failed' )
+			end
+		end
+
+		$test_status.rc_for_power_on_during_precheck = AngelCore::RC_CONTINUE
+
+		rc = -1
+
+		1.upto( 2 ) do |count|
+
+			rc = $angel.power_on_default()
+
+			if	rc == AngelCore::RC_OK
+
+				break
+			else
+				if count.to_i == 1
+
+					$angel.power_off
+
+					$angel.core.close_handle()
+
+					text = 'WARN  : POWER ON FAILED      : RETRY POWER ON       : ' + count.to_s + "\n" ; log( text )
+				end
+			end
+		end
+
+		if rc == AngelCore::RC_OK
+
+                        $LOAD_PATH.unshift( $test_info.home_directory.to_s , '/home/everest/angel_libs/' )
+
+			require 'Workloads'
+
+			$ANGEL = Workloads.new()
+
+			@options[ :precheck_version ] = VERSION
+
+			rc = $ANGEL.precheck( @options )
+
+			unless rc == 1
+
+				unless $angel.shared.p_latest_error_info_ == nil ; $angel.shared.p_latest_error_info_.after_action_.power_keep=true ; end
+
+				$ANGEL.f_log( [ 'ERROR' , 'PRECHECK FAILURE' + "\n" ] )
+
+				$angel.test_end( 'Failed' )
+			end
+
+			$ANGEL.f_log( [ 'INFO' , 'PRECHECK' , 'COMPLETED' + "\n" ] )
+		else
+			unless $angel.shared.p_latest_error_info_ == nil ; $angel.shared.p_latest_error_info_.after_action_.power_keep=true ; end
+
+			text = 'ERROR : POWER ON FAILED      : ERROR ( RC )         : ' + rc.inspect + "\n" ; log( text )
+
+			$angel.test_end( 'Failed' )
+		end
+	end
+end
+
+Precheck.precheck
