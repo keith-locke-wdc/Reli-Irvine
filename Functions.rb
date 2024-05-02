@@ -1,7 +1,7 @@
 
 class Functions
 
-	VERSION = 10.0
+	VERSION = 10.7
 
 	# TO LOG DEBUG OUTPUT FOR THIS LIBRARY SET DEBUG_LEVEL TO -1
 	def initialize()
@@ -75,14 +75,14 @@ class Functions
 			:syslog			=> Syslog::Logger.new ,
 			:chamber_set_temp_info	=> nil ,
 			:enable_bad_fh_retries	=> true ,
-			:device_open_retries	=> 3 ,
+			:device_open_retries	=> 2 ,
 			:get_eye_diagram	=> true ,
 			:selected_namespace	=> 1 ,
 			:tmm			=> nil ,
 			:tmm_check_error_action	=> 'fail' ,
 			:queue_depth		=> 0 ,
 			:enable_parametrics	=> true ,
-			:enable_uart		=> true ,
+			:enable_uart		=> false ,
 			:uart_error_action	=> 'ignore' ,
 			:enable_smart_checking	=> true ,
 			:in_precheck		=> true ,
@@ -177,15 +177,14 @@ class Functions
 
 			:instance_counter	=> 0 ,
 			:log_pages		=> { '0x02' => {} , '0x03' => {} , '0xD0' => {} , '0x3E' => {} , '0xC0_MSFT' => {} , '0xC1_MSFT' => {} , '0xC2_MSFT' => {} } ,
-			:fadu_log_pages		=> { '0x02' => {} , '0xCA' => {} } ,
+			:fadu_log_pages		=> { '0x02' => {} , '0xC0' => {} , '0xCA' => {} } ,
 			:io_tracker		=> {}
 		}
 
 		@external_data_tables = {
 
-			:customer_id_table => {} ,
-			:fw_version_decoder => {} ,
-			:device_id_list	=> {} ,
+			:customer_id_table	=> {} ,
+			:device_id_list		=> {} ,
 		}
 
 		@namespace_info = {}
@@ -308,12 +307,12 @@ class Functions
 			rc = %x( #{ cmd } )
 		end
 
-		# Populates @drive_info[ :bus_path ] , @drive_info[ :bus_id ] , @drive_info[ :device_id ]
-		_get_bus_path()
-
 		_display_test_options()
 
 		display_power_info()
+
+		# Populates @drive_info[ :bus_path ] , @drive_info[ :bus_id ] , @drive_info[ :device_id ]
+		_get_bus_path()
 
 		assert( func: 'clear' , log: true )
 
@@ -659,14 +658,11 @@ class Functions
 
 		unless rc == 0 ; force_failure( category: 'angel_command_failure' , data: rc.to_s ) ; end
 
-		if unsafe == true
+		rc = $angel.nvme_device_cleanup
 
-			rc = $angel.nvme_device_cleanup
+		unless rc == 0 ; force_failure( category: 'angel_command_failure' , data: rc.to_s ) ; end
 
-			unless rc == 0 ; force_failure( category: 'angel_command_failure' , data: rc.to_s ) ; end
-
-			@test_info[ :ungraceful_power_cycle_count ] += 1
-		end
+		if unsafe == true ; @test_info[ :ungraceful_power_cycle_count ] += 1 ; end
 	end
 
 	# Performs a drive power cycle
@@ -709,11 +705,15 @@ class Functions
 		rc = $angel.nvme_device_cleanup()
 
 		unless rc == 0 ; force_failure( category: 'angel_command_failure' , data: rc.to_s ) ; end
+
+		$angel.core.close_handle()
 	end
 
 	# Performs a check to ensure drive link rate and link width are properly detected
 	# Issues an 'incorrect_link_rate' failure to angel if link check fails
 	def link_check()
+
+		_get_bus_link_rate()
 
 		if @drive_info[ :current_link_width ][0] != @drive_info[ :max_link_width ][0]
 
@@ -760,7 +760,7 @@ class Functions
 	# valid options are 'check' or 'clear'
 	def assert( func: 'check' , log: true )
 
-		return unless @drive_info[ :supplier ] == 'WDC'
+		return unless @drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
 		if func == 'clear' && @test_info[ :clear_assert ] == false ; return ; end
 
@@ -811,7 +811,7 @@ class Functions
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_EVENTLOG_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_EVENTLOG_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET DATA' , 'EVENTLOG' , filename.to_s ] ) ; log() ; end
 
@@ -828,15 +828,13 @@ class Functions
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		if	@drive_info[ :supplier ] == 'WDC'
+		if	@drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
 			_decode_snowbird_3e( log: log )
 
 			_inspector_csv( log: log )
 
-		elsif	@drive_info[ :supplier ] == 'FADU'
-
-			@drive_info[ :product_architecture ] = 'FADU'
+		elsif	@drive_info[ :product_architecture ].include?( 'FADU' )
 
 			@drive_info[ :product_name ] = @drive_info[ :pn ]
 
@@ -862,7 +860,7 @@ class Functions
 	# Drive event log will be marked with 'DIAG MARK'
 	def write_drive_log( data: nil , log: false )
 
-		return unless @drive_info[ :supplier ] == 'WDC'
+		return unless @drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
 		return unless @test_info[ :write_drive_log ] == true
 
@@ -1506,8 +1504,6 @@ class Functions
 				f_log( [ 'FUNC' , 'SFTP' , 'FADU DATA FILE' , filename.to_s ] )
 
 				begin
-					#sftp_upload_cmd = $test_info.home_directory + "sshpass -p everest ssh everest@192.0.0.254 \"curl -v 'sftp://sftp2.wdc.com:22' --user 'essd_reli:jMTXiQjq%RzeNb*aK8eFWA' -T '" +  $test_info.home_directory + filename.to_s + "'" + ' 2>&1"'
-
 					sftp_upload_cmd = $test_info.home_directory + "sshpass -p everest ssh everest@192.0.0.254 \"sshpass -p jMTXiQjq%RzeNb*aK8eFWA sftp -o StrictHostKeyChecking=no essd_reli@sftp2.wdc.com:/ <<< $'put " + $test_info.home_directory + filename.to_s + "'" + ' 2>&1"'
 
 					rc = %x( #{ sftp_upload_cmd } )
@@ -1533,9 +1529,9 @@ class Functions
 
 	def inspector_upload()
 
-		if @drive_info[ :supplier ].to_s == 'FADU' ; fadu_csv_upload() ; return ; end
+		if @drive_info[ :product_architecture ].include?( 'FADU') ; fadu_csv_upload() ; return ; end
 
-		return unless @drive_info[ :supplier ].to_s == 'WDC'
+		return unless @drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
 		_inspector_csv()
 
@@ -1611,19 +1607,21 @@ class Functions
 
 	def get_log_page_CA_FADU( log: true )
 
+		return unless @drive_info[ :product_architecture ].include?( 'FADU' )
+
 		@drive_info[ :data_current ] = false
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
 		time_stamp = ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s
 
-		filename = 'ANGEL_CA-FADU_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + time_stamp.to_s + '.bin'
+		filename = 'ANGEL_CA-FADU_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + time_stamp.to_s + '.bin'
 
 		fadu_filename = @test_info[ :script_name ].to_s.upcase + '-' + @test_info[ :test_phase ].to_s.upcase + '_' + @drive_info[ :sn ].to_s + '_' + @test_info[ :start_time ].strftime( "%Y%m%d-%H%M%S" ).to_s + '_' + time_stamp.to_s + '_lpCA.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , 'CA-FADU' , filename.to_s ] ) ; end
 
-		cmd = '/home/everest/angel_bin/nvme-cli admin-passthru ' + @drive_info[ :ctrl_id ][0].to_s + ' -o=0x02 -n=0xFFFFFFFF --cdw10=0x800000CA --cdw14=2 --data-len=131072 --read --raw-binary > ' + $test_info.home_directory + filename.to_s
+		cmd = $test_info.home_directory + 'nvme-cli admin-passthru ' + @drive_info[ :ctrl_id ][0].to_s + ' -o=0x02 -n=0xFFFFFFFF --cdw10=0x800000CA --cdw14=2 --data-len=131072 --read --raw-binary > ' + $test_info.home_directory + filename.to_s
 
 		rc = %x( #{ cmd } )
 
@@ -1645,19 +1643,21 @@ class Functions
 
 	def get_log_page_CB_FADU( log: true )
 
+		return unless @drive_info[ :product_architecture ].include?( 'FADU' )
+
 		@drive_info[ :data_current ] = false
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
 		time_stamp = ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s
 
-		filename = 'ANGEL_CB-FADU_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + time_stamp.to_s + '.bin'
+		filename = 'ANGEL_CB-FADU_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + time_stamp.to_s + '.bin'
 
 		fadu_filename = @test_info[ :script_name ].to_s.upcase + '-' + @test_info[ :test_phase ].to_s.upcase + '_' + @drive_info[ :sn ].to_s + '_' + @test_info[ :start_time ].strftime( "%Y%m%d-%H%M%S" ).to_s + '_' + time_stamp.to_s + '_lpCB.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , 'CB-FADU' , filename.to_s ] ) ; end
 
-		cmd = '/home/everest/angel_bin/nvme-cli admin-passthru ' + @drive_info[ :ctrl_id ][0].to_s + ' -o=0x02 -n=0xFFFFFFFF --cdw10=0x800000CB --cdw14=2 --data-len=791552 --read --raw-binary > ' + $test_info.home_directory + filename.to_s
+		cmd = $test_info.home_directory + 'nvme-cli admin-passthru ' + @drive_info[ :ctrl_id ][0].to_s + ' -o=0x02 -n=0xFFFFFFFF --cdw10=0x800000CB --cdw14=2 --data-len=791552 --read --raw-binary > ' + $test_info.home_directory + filename.to_s
 
 		rc = %x( #{ cmd } )
 
@@ -1677,13 +1677,13 @@ class Functions
 
 	def get_log_page_C0h_MSFT( log: false )
 
-		unless @drive_info[ :customer ].include?( 'MICROSOFT' ) ; return ; end
+		return unless @drive_info[ :customer ].include?( 'MICROSOFT' )
 
 		@drive_info[ :data_current ] = false
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_C0-MSFT_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_C0-MSFT_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , 'C0-MSFT' , filename.to_s ] ) ; end
 
@@ -1762,13 +1762,13 @@ class Functions
 	# MICROSOFT Specific : OCP - Error Recovery Log Page (0xC1)
 	def get_log_page_C1h_MSFT( log: false )
 
-		unless @drive_info[ :customer ].include?( 'MICROSOFT' ) ; return ; end
+		return unless @drive_info[ :customer ].include?( 'MICROSOFT' )
 
 		@drive_info[ :data_current ] = false
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_C1-MSFT_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_C1-MSFT_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , 'C1-MSFT' , filename.to_s ] ) ; end
 
@@ -1810,9 +1810,54 @@ class Functions
 		@drive_info[ :data_current ] = true
 	end
 
+	# https://fadu-wdc.atlassian.net/browse/U2CARREVAL-591
+	def get_log_page_C2h_FADU( log: true , dump_logs: true )
+
+		return unless @drive_info[ :product_architecture ].include?( 'FADU' )
+
+		@drive_info[ :data_current ] = false
+
+		@error_info[ :pending_failure_info ] = __method__.to_s
+
+		# Clear Buffer
+		$angel.buffer.clear( @test_info[ :functions_buffer_id ] )
+
+		# Get Log Page C2h
+		# 4096 bytes / 4 = 1024 ( 0x400 ) DWORDS
+		# DWORD 14 : 3 specifies standard log page
+		rc = $angel.nvme_custom_command( 0x02 , 0xFFFFFFFF , 0x040000C2 , 0 , 0 , 0 , 3 , 0 , @test_info[ :functions_buffer_id ] , 512 )
+
+		unless rc == 0 ; force_failure( category: 'nvme_custom_command_failure' , data: rc.to_s ) ; return ; end
+
+		security_data = $angel.buffer.get_integer( @test_info[ :functions_buffer_id ] , 300 , 1 , 'little' , 'unsigned' )
+
+		if	security_data.to_s(16) == '02'
+
+			security_type = 'TCG'
+
+		elsif	security_data.to_s(16) == '20'
+
+			security_type = 'SE'
+
+		elsif	security_data.to_s(16) == '10'
+
+			security_type = 'ISE'
+		else
+			security_type = 'XX'
+		end
+
+		@drive_info[ :fw_type ] = security_type
+
+		@error_info[ :pending_failure_info ] = 'NA'
+
+		@drive_info[ :data_current ] = true
+	end
+
 	def get_log_page_C2h( log: false , dump_logs: true )
 
-		return unless @drive_info[ :supplier ] == 'WDC'
+		if @drive_info[ :product_architecture ].include?( 'FADU' ) ; _get_customer_info( id: @drive_info[ :fw_device_id ] ) ; end
+
+		return unless @drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
 		@drive_info[ :data_current ] = false
 
@@ -1882,6 +1927,8 @@ class Functions
 
 				data = data.to_s(16)[ -8..-1 ]
 
+#KAL
+=begin
 				# https://confluence.wdc.com/pages/viewpage.action?spaceKey=FWCCB7&title=Project+Identification
 				# iiii iiii ssss ssss pppp pppp bbbb bbvv
 				# Not used in HudsonBay
@@ -1904,6 +1951,11 @@ class Functions
 
 					@drive_info[ :product_family ] = product_family_id[ @drive_info[ :product_architecture ].to_s ][ branch ].upcase
 
+					if @drive_info[ :fw_product_family ] == 'coffeebay_hp'
+
+						@drive_info[ :product_family ] = 'COFFEEBAYPLUS'
+					end
+
 					if @drive_info[ :product_family ] == nil
 
 						_warning_counter( category: 'product_family' , data: 'CHECK / UPDATE LOG PAGE C2H DATA TABLE' )
@@ -1920,17 +1972,11 @@ class Functions
 					elsif	data.to_i(16) >= 0x10 && 0x1F >= data.to_i(16)
 
 						@drive_info[ :product_architecture ] = 'THUNDERBIRD'
-
-					elsif	data.to_i(16) >= 0x100 && 0x11F >= data.to_i(16)
-
-						@drive_info[ :product_architecture ] = 'SIRIUS'
 					else
 						@drive_info[ :product_architecture ] = 'UNKNOWN'
 
 						_warning_counter( category: 'product_architecture' , data: 'CHECK / UPDATE LOG PAGE C2H DATA TABLE' )
 					end
-
-					product_family_id = { '00000050' => 'hudsonbay' }
 
 					@drive_info[ :product_family ] = product_family_id[ data.to_s ]
 
@@ -1939,10 +1985,15 @@ class Functions
 						_warning_counter( category: 'product_family' , data: 'CHECK / UPDATE LOG PAGE C2H DATA TABLE' )
 					end
 				end
+=end
 
-				# Populates @drive_info[ :customer ]
 				# Information Is From Security Roadmap and Requirements Summary.xlsx ( https://wdc.app.box.com/folder/87561046914?s=2fhn9pndl3knrge1red8ma5ejb1wa958 )
-				if field_id.to_s(16) == '15' ; _decode_fw_customer_id( id: data ) ; end
+				if field_id.to_s(16) == '15'
+
+					@drive_info[ :fw_device_id ] = data
+
+					_get_customer_info( id: @drive_info[ :fw_device_id ] )
+				end
 
 				# Check if assert is present
 				if field_id.to_s(16) == '19'
@@ -1958,7 +2009,7 @@ class Functions
 						force_failure( category: 'assert_detected' , data: 'ASSERT DETECTED' )
 					end
 				end
-
+#KAL
 =begin
 				# Populates @drive_info[ :form_factor ]
 				# Information Is From https://confluence.wdc.com/pages/viewpage.action?pageId=609936123
@@ -2005,7 +2056,7 @@ class Functions
 			offset += field_length
 		end
 
-		filename = 'ANGEL_C2_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_C2_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true
 
@@ -2036,13 +2087,13 @@ class Functions
 	# MICROSOFT Specific : OCP - Firmware Activation History Log page (0xC2)
 	def get_log_page_C2h_MSFT( log: false )
 
-		unless @drive_info[ :customer ].include?( 'MICROSOFT' ) ; return ; end
+		return unless @drive_info[ :customer ].include?( 'MICROSOFT' )
 
 		@drive_info[ :data_current ] = false
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_C2-MSFT_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_C2-MSFT_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , 'C2-MSFT' , filename.to_s ] ) ; end
 
@@ -2174,58 +2225,47 @@ class Functions
 		@drive_info[ :data_current ] = true
 	end
 
-	# Confluence Page for log page FA https://confluence.wdc.com/pages/viewpage.action?spaceKey=SBESS&title=NVMe+Get+Log+Pages
-	# Used to get customer ID
-	# This log page is not archived
-	def get_log_page_FAh( log: false , dump_logs: false )
+	def get_log_page_C0h_FADU( log: true )
+
+		return unless @drive_info[ :product_architecture ].include?( 'FADU' )
 
 		@drive_info[ :data_current ] = false
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_FA_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		inspector_time_stamp = Time.now.strftime( "%Y/%m/%d %H:%M:%S" ).to_s
+
+		filename = 'ANGEL_C0-FADU_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+
+		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , 'C0-FADU' , filename.to_s ] ) ; end
 
 		# Clear Buffer
 		$angel.buffer.clear( @test_info[ :functions_buffer_id ] )
 
-		# Get Log Page FAh
-		# Log Page length is 36 bytes , 0 based
-		#rc = $angel.nvme_custom_command( 0x02 , 0xFFFFFFFF , 0x000A00FA , 0 , 0 , 0 , 0 , 0 , @test_info[ :functions_buffer_id ] , 512 )
-		rc = $angel.nvme_custom_command( 0x02 , 0xFFFFFFFF , 0x000A00FA , 0 , 0 , 0 , 1 , 0 , @test_info[ :functions_buffer_id ] , 512 )
+		# Get Log Page 02h SMART
+		# 02h length data length is 512 bytes ; bytes 511:232 are reserved
+		# 512 bytes / 4 = 128 ( 0x80 ) DWORDS
+		rc = $angel.nvme_custom_command( 0x02 , 0xFFFFFFFF , 0x008000C0 , 0 , 0 , 0 , 0 , 0 , @test_info[ :functions_buffer_id ] , 512 )
 
-		unless rc == 0
+		unless rc == 0 ; force_failure( category: 'nvme_custom_command_failure' , data: rc.to_s ) ; return ; end
 
-			force_failure( category: 'nvme_custom_command_failure' , data: rc.to_s )
+		fadu_csv_info = {}
 
-			return
-		end
+		fadu_csv_info[ 'end_to_end_correction_counts_detected_errors' ] = $angel.buffer.get_integer( @test_info[ :functions_buffer_id ] , 72 , 4 , 'little' , 'unsigned' )
 
-		if log == true
+		fadu_csv_info[ 'capacitor_health' ] = $angel.buffer.get_integer( @test_info[ :functions_buffer_id ] , 128 , 2 , 'little' , 'unsigned' )
 
-			if dump_logs == true
+		# Dump the data buffer to file
+		rc = $angel.buffer.dump_buffer( @test_info[ :functions_buffer_id ] , filename , 512 , AngelCore::FileFormat_Binary , AngelCore::FileMode_Append )
 
-				f_log( [ 'FUNC' , 'GET LOG PAGE' , 'FA' , filename.to_s ] )
-			else
-				f_log( [ 'FUNC' , 'GET LOG PAGE' , 'FA' ] )
-			end
-		end
-
-		fw_customer_id = ( $angel.buffer.get_integer( @test_info[ :functions_buffer_id ] , 8 , 4 , 'little' , 'unsigned' ) ).to_s(16)
-
-		if dump_logs == true
-
-			# Dump the data buffer to file
-			rc = $angel.buffer.dump_buffer( @test_info[ :functions_buffer_id ] , filename , 36 , AngelCore::FileFormat_Binary , AngelCore::FileMode_Append )
-
-			unless rc == 0 ; force_failure( category: 'angel_command_failure' , data: rc.to_s ) ; return ; end
-		end
-
-		# Populates @drive_info[ :customer ]
-		# Information Is From Security Roadmap and Requirements Summary.xlsx ( https://wdc.app.box.com/folder/87561046914?s=2fhn9pndl3knrge1red8ma5ejb1wa958 )
-		_decode_fw_customer_id( id: fw_customer_id )
+		unless rc == 0 ; force_failure( category: 'angel_command_failure' , data: rc.to_s ) ; return ; end
 
 		# This is used to display log pages retrieved in post-script-handler
 		unless @test_info[ :status ] == 'testing' ; @test_logs[ :post ].push( filename ) ; end
+
+		@inspector_info[ :fadu_log_pages ][ '0xC0' ][ inspector_time_stamp ] = {}
+
+		@inspector_info[ :fadu_log_pages ][ '0xC0' ][ inspector_time_stamp ] = fadu_csv_info
 
 		@error_info[ :pending_failure_info ] = 'NA'
 
@@ -2242,7 +2282,7 @@ class Functions
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_02_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_02_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , '02' , filename.to_s ] ) ; end
 
@@ -2334,10 +2374,13 @@ class Functions
 
 		@inspector_info[ :log_pages ][ '0x02' ][ inspector_time_stamp ] = inspector_info
 
-		# FADU 
 		fadu_csv_info = {}
 
+		fadu_csv_info[ 'power_on_hours' ] = inspector_info[ 'power_on_hours' ]
+
 		fadu_csv_info[ 'temp_sensor_current' ] = inspector_info[ 'temperature_sensor_1' ]
+
+		fadu_csv_info[ 'temp_sensor_1' ] = inspector_info[ 'temperature_sensor_1' ]
 
 		fadu_csv_info[ 'temp_sensor_2_min' ] = inspector_info[ 'temperature_sensor_2' ]
 
@@ -2386,11 +2429,11 @@ class Functions
 	# This log page is not archived
 	def get_log_page_03h( log: false , display: false )
 
-		unless @drive_info[ :data_current ] == true ; return ; end
+		return unless @drive_info[ :data_current ] == true
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_03_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' +@drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_03_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' +@drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , '03' , filename.to_s ] ) ; end
 
@@ -2452,13 +2495,13 @@ class Functions
 	# AMAZON Specific : AWS Customer Unique SMART Log Page (0xD0)
 	def get_log_page_D0h_AWS( log: false )
 
-		unless @drive_info[ :customer ].include?( 'AMAZON' ) ; return ; end
+		return unless @drive_info[ :customer ].include?( 'AMAZON' )
 
 		@drive_info[ :data_current ] = false
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_D0-AWS_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_D0-AWS_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , 'D0-AWS' , filename.to_s ] ) ; end
 
@@ -2518,13 +2561,13 @@ class Functions
 	# This log page is not currently used
 	def get_log_page_0Dh( log: nil , dump_logs: nil )
 
-		unless @drive_info[ :persistent_event_log_supported ] == true ; return ; end
+		return unless @drive_info[ :persistent_event_log_supported ] == true
 
 		@drive_info[ :data_current ] = false
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		filename = 'ANGEL_0D_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_0D_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true
 
@@ -2632,7 +2675,7 @@ class Functions
 
 			0.upto( 3 ) do |phy|
 		
-				filename = 'ANGEL_EYE-DIAGRAM-' + port_id + '-PHY' + phy.to_s + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s
+				filename = 'ANGEL_EYE-DIAGRAM-' + port_id + '-PHY' + phy.to_s + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s
 
 				unless log == false ; f_log( [ 'FUNC' , 'GET EYE DIAGRAM' , port_id + ' - PHY' + phy.to_s , filename.to_s + '.html' ] ) ; end
 
@@ -2707,11 +2750,13 @@ class Functions
 
 	def get_fadu_telemetry_log( log: false )
 
+		return unless @drive_info[ :product_architecture ].include?( 'FADU' )
+
 		time_stamp = ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s
 
-		bin_filename = 'ANGEL_TELEMETRY_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + time_stamp.to_s + '.bin'
+		bin_filename = 'ANGEL_TELEMETRY_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + time_stamp.to_s + '.bin'
 
-		text_filename = 'ANGEL_TELEMETRY_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + time_stamp.to_s + '.txt'
+		text_filename = 'ANGEL_TELEMETRY_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + time_stamp.to_s + '.txt'
 
 		#fadu_bin_filename = @test_info[ :script_name ].to_s.upcase + '-' + @test_info[ :test_phase ].to_s.upcase + '_' + @drive_info[ :sn ].to_s + '_' + @test_info[ :start_time ].strftime( "%Y%m%d-%H%M%S" ).to_s + '_' + time_stamp.to_s + '_telemetry.bin'
 
@@ -2719,7 +2764,7 @@ class Functions
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , 'TELEMETRY' , bin_filename ] ) ; end
 
-		cmd = '/home/everest/angel_bin/nvme-cli telemetry-log ' + @drive_info[ :ctrl_id ][0].to_s + ' -o ' + $test_info.home_directory + bin_filename.to_s
+		cmd = $test_info.home_directory + 'nvme-cli telemetry-log ' + @drive_info[ :ctrl_id ][0].to_s + ' -o ' + $test_info.home_directory + bin_filename.to_s
 
 		rc = ( %x( #{ cmd } ) ).chomp
 
@@ -2751,13 +2796,19 @@ class Functions
 	# @return filename
 	def get_e6( log: true , mode: 'E6' )
 
+		return unless @test_info[ :get_e6 ] == true
+
+		if @drive_info[ :product_architecture ].include?( 'FADU' ) ; get_fadu_telemetry_log( log: log ) ; end
+
+		return unless @drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
+
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
 		if	mode == 'E6'
 
 			dword_12 = 0x0
 
-			filename = 'ANGEL_E6_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+			filename = 'ANGEL_E6_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 			text = 'E6'
 
@@ -2771,7 +2822,7 @@ class Functions
 
 			dword_12 = 0x3E
 
-			filename = 'ANGEL_3E_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+			filename = 'ANGEL_3E_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 			text = '3E'
 
@@ -2829,7 +2880,7 @@ class Functions
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		cmd = '/home/everest/angel_bin/nvme-cli format ' + @drive_info[ :ctrl_id ][0].to_s + ' ' + options.to_s
+		cmd = $test_info.home_directory + 'nvme-cli format ' + @drive_info[ :ctrl_id ][0].to_s + ' ' + options.to_s
 
 		f_log( [ 'FUNC' , cmd.to_s + "\n" ] )
 
@@ -2998,7 +3049,7 @@ class Functions
 
 		FileUtils.copy( @test_info[ :local_fw_repo ] + @drive_info[ :fw ].to_s.upcase + '/tdds/' + tdd.to_s , $test_info.home_directory )
 
-		filename = 'ANGEL_' + ( tdd_name.to_s.tr( '_' , '-' ).upcase ) + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.txt'
+		filename = 'ANGEL_' + ( tdd_name.to_s.tr( '_' , '-' ).upcase ) + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.txt'
 
 		if log == true ; f_log( [ 'FUNC' , 'TDD' , tdd_name.to_s.upcase , filename + "\n" ] ) ; end
 
@@ -3091,7 +3142,7 @@ class Functions
 
 			$angel.check_instruction
 
-			filename = 'ANGEL_' + ( 'create_default_trim_reg_file_local'.to_s.tr( '_' , '-' ).upcase ) + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.txt'
+			filename = 'ANGEL_' + ( 'create_default_trim_reg_file_local'.to_s.tr( '_' , '-' ).upcase ) + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.txt'
 
 			begin
 				rc = Sbdi_angel.run_tdd( ( $angel.core.get_drive_command() ) , $test_info.home_directory.to_s + 'create_default_trim_reg_file.bin' , $test_info.home_directory + filename.to_s )
@@ -3116,7 +3167,7 @@ class Functions
 
 		$angel.check_instruction
 
-		filename = 'ANGEL_' + ( 'tmm_lut_local'.to_s.tr( '_' , '-' ).upcase ) + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.txt'
+		filename = 'ANGEL_' + ( 'tmm_lut_local'.to_s.tr( '_' , '-' ).upcase ) + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.txt'
 
 		rc = Sbdi_angel.run_tdd( ( $angel.core.get_drive_command() ) , $test_info.home_directory + tmm.to_s , $test_info.home_directory + filename.to_s )
 
@@ -3128,7 +3179,7 @@ class Functions
 
 		$angel.check_instruction
 
-		filename = 'ANGEL_' + ( 'tmm_lut'.to_s.tr( '_' , '-' ).upcase ) + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.txt'
+		filename = 'ANGEL_' + ( 'tmm_lut'.to_s.tr( '_' , '-' ).upcase ) + '_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.txt'
 
 		get_log_page_C2h( log: false , dump_logs: false )
 
@@ -3141,17 +3192,17 @@ class Functions
 	end
 
 	# sends custom VUC to put drive into devprep mode
-	# fw_customer_id is only required when changing FW types i.e. MS to MT
+	# fw_type is only required when changing FW types i.e. MS to MT
 	# Calls Functions::firmware-download , loads new FW to slot 1 with commit 1 , skips remaining slots
 	# Calls Functions::firmware-download , loads FW to all FW slots & activates slot 1 with commit 3 , no power cycle
 	# Calls Functions::nvme_format with power cycle
-	def dev_prep_p( firmware: nil , fw_customer_id: nil , format: nil , wait: 240 )
+	def dev_prep_p( firmware: nil , fw_type: nil , format: nil , wait: 240 )
 
 		if @test_info[ :port_configuration ].to_s == '2x2' ; _warning_counter( category: 'dev_prep_error' , data: 'DEVPREP IS ONLY SUPPORTED IN 1x4 MODE' ) ; return ; end
 
 		f_log( [ 'INFO' , 'DEV-PREP-P' , 'STARTED' + "\n" ] )
 
-		if fw_customer_id == nil ; fw_customer_id = @drive_info[ :fw_customer_id ] ; end
+		if fw_type == nil ; fw_type = @drive_info[ :fw_type ] ; end
 
 		f_log( [ 'FUNC' , 'ENABLE DEV-PREP-P' + "\n" ] )
 
@@ -3161,7 +3212,7 @@ class Functions
 
 		skip = [ 2 , 3 , 4 ]
 
-		firmware_download( firmware: firmware , fw_customer_id: fw_customer_id , firmware_slot: 1 , power_cycle: 'return' , commit_action: 1 , skip_slot: skip , disable_error_handler: true )
+		firmware_download( firmware: firmware , fw_type: fw_type , firmware_slot: 1 , power_cycle: 'return' , commit_action: 1 , skip_slot: skip , disable_error_handler: true )
 
 		f_log( [ 'INFO' , 'ERROR HANDLING' , 'DISABLED' , __method__.to_s.upcase + "\n" ] )
 
@@ -3203,31 +3254,46 @@ class Functions
 
 		power_on()
 
-		firmware_download( firmware: firmware , fw_customer_id: fw_customer_id , firmware_slot: 1 , power_cycle: true , commit_action: 3 )
+		firmware_download( firmware: firmware , fw_type: fw_type , firmware_slot: 1 , power_cycle: true , commit_action: 3 )
 
 		unless format == nil ; nvme_format( block_size: format , power_cycle: true ) ; end
 
 		f_log( [ 'INFO' , 'DEV-PREP-P' , 'COMPLETED' + "\n" ] )
 	end
 
-	# fw_customer_id is only required when changing FW types i.e. MS to MT
+	# fw_type is only required when changing FW types i.e. MS to MT
 	# Extends the POR and General timeout values to 120000 msecs during this function, then sets them back to original settings
 	# Performs a FW download to slots 1 - 4
 	# Activates FW in the user defined FW slot
 	# Calls Functions::power_cycle
 	# Sets POR and General timeouts back to their original values
 	# skip allows user to skip a FW slot ( L2C drives can not load to slot 1 )
-	def firmware_download( firmware: nil , fw_customer_id: nil , firmware_slot: 1 , power_cycle: true , commit_action: 3 , skip_slot: -1 , disable_error_handler: false )
+	def firmware_download( firmware: nil , fw_type: nil , firmware_slot: nil , power_cycle: true , commit_action: 3 , skip_slot: -1 , disable_error_handler: false )
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		if fw_customer_id == nil ; fw_customer_id = @drive_info[ :fw_customer_id ] ; end
+		if fw_type == nil ; fw_type = @drive_info[ :fw_type ] ; end
 
-		get_firmware_files( fw_version: firmware.to_s , fw_customer_id: fw_customer_id.to_s.upcase )
+		get_firmware_files( fw_version: firmware.to_s , fw_type: fw_type.to_s.upcase )
 
-		firmware_file = Dir[ '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/' + @drive_info[ :product_family ].to_s.downcase + '*' + fw_customer_id.to_s.upcase + '*.vpkg' ][0]
+		if	@drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
-		unless File.exists?( firmware_file.to_s ) ; force_failure( category: 'file_not_found' , data: firmware_file.to_s ) ; end
+			firmware_file = Dir[ '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/*' + fw_type.to_s.upcase + '.vpkg' ][0]
+
+			unless File.exists?( firmware_file.to_s )
+
+				force_failure( category: 'file_not_found' , data: '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/*' + fw_type.to_s.upcase + '.vpkg' )
+			end
+
+		elsif	@drive_info[ :product_architecture ].include?( 'FADU' )
+
+			firmware_file = Dir[ @test_info[ :local_fw_repo ] + firmware.to_s.upcase + '/' + firmware.to_s + '.??_' + fw_type.to_s.downcase + '.bin' ][0]
+
+			unless File.exists?( firmware_file.to_s )
+
+				force_failure( category: 'file_not_found' , data: '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/' + firmware.to_s + + '.??_' + fw_type.to_s.downcase + '.bin' )
+			end
+		end
 
 		firmware_file_size = File.size( firmware_file ).to_i
 
@@ -3259,8 +3325,21 @@ class Functions
 			$test_status.skip_error_handling = true
 		end
 
+		if	@drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
+
+			first_fw_slot = 1 ; last_fw_slot = 4
+
+			if firmware_slot == nil ; firmware_slot = 1 ; end
+
+		elsif	@drive_info[ :product_architecture ].include?( 'FADU' )
+
+			first_fw_slot = 0 ; last_fw_slot = 2
+
+			if firmware_slot == nil ; firmware_slot = 0 ; end
+		end
+
 		# FW Slots
-		( 1 ).upto( 4 ) do |slot| 
+		( first_fw_slot.to_i ).upto( last_fw_slot.to_i ) do |slot| 
 
 			next if skip.include?( slot )
 
@@ -3374,17 +3453,16 @@ class Functions
 		end
 	end
 
-	# fw_customer_id is only required when changing FW types i.e. MS to MT
-	def dev_prep_p_nvme_cli( firmware: nil , fw_customer_id: nil , format: nil , wait: 240 )
+	# fw_type is only required when changing FW types i.e. MS to MT
+	def dev_prep_p_nvme_cli( firmware: nil , fw_type: nil , format: nil , wait: 240 )
 
 		if @test_info[ :port_configuration ].to_s == '2x2' ; _warning_counter( category: 'dev_prep_error' , data: 'DEVPREP IS ONLY SUPPORTED IN 1x4 MODE' ) ; return ; end
 
-		if fw_customer_id == nil ; fw_customer_id = @drive_info[ :fw_customer_id ] ; end
+		if fw_type == nil ; fw_type = @drive_info[ :fw_type ] ; end
 
 		f_log( [ 'INFO' , 'DEV-PREP-P' , 'STARTED' + "\n" ] )
 
-		# example : /home/everest/angel_bin/nvme-cli admin-passthru --opcode=0xF0 --cdw12=0x21a /dev/nvme0
-		cmd = '/home/everest/angel_bin/nvme-cli admin-passthru --opcode=0xF0 --cdw12=0x21a ' + @drive_info[ :ctrl_id ][0].to_s + ' 2>&1'
+		cmd = $test_info.home_directory + 'nvme-cli admin-passthru --opcode=0xF0 --cdw12=0x21a ' + @drive_info[ :ctrl_id ][0].to_s + ' 2>&1'
 
 		f_log( [ 'FUNC' , cmd.to_s + "\n" ] )
 
@@ -3394,7 +3472,7 @@ class Functions
 
 		skip = [ 2 , 3 , 4 ]
 
-		firmware_download_nvme_cli( firmware: firmware , fw_customer_id: fw_customer_id , firmware_slot: 1 , power_cycle: 'return' , commit_action: 1 , skip_slot: skip )
+		firmware_download_nvme_cli( firmware: firmware , fw_type: fw_type , firmware_slot: 1 , power_cycle: 'return' , commit_action: 1 , skip_slot: skip )
 
 		f_log( [ 'INFO' , 'ERROR HANDLING' , 'DISABLED' , __method__.to_s.upcase + "\n" ] )
 
@@ -3436,37 +3514,37 @@ class Functions
 
 		$test_status.skip_error_handling = false
 
-		firmware_download_nvme_cli( firmware: firmware , fw_customer_id: fw_customer_id , firmware_slot: 1 , power_cycle: true , commit_action: 3 )
+		firmware_download_nvme_cli( firmware: firmware , fw_type: fw_type , firmware_slot: 1 , power_cycle: true , commit_action: 3 )
 
 		unless format == nil ; nvme_format( block_size: format , power_cycle: true ) ; end
 
 		f_log( [ 'INFO' , 'DEVPREP' , 'COMPLETED' + "\n" ] )
 	end
 
-	def firmware_download_nvme_cli( firmware: nil , fw_customer_id: nil , firmware_slot: nil , power_cycle: true , commit_action: 3 , skip_slot: -1 )
+	def firmware_download_nvme_cli( firmware: nil , fw_type: nil , firmware_slot: nil , power_cycle: true , commit_action: 3 , skip_slot: -1 , options: nil )
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		if fw_customer_id == nil ; fw_customer_id = @drive_info[ :fw_customer_id ] ; end
+		if fw_type == nil ; fw_type = @drive_info[ :fw_type ] ; end
 
-		get_firmware_files( fw_version: firmware.to_s , fw_customer_id: fw_customer_id.to_s.upcase )
+		get_firmware_files( fw_version: firmware.to_s , fw_type: fw_type.to_s.upcase )
 
-		if	@drive_info[ :supplier ] == 'WDC'
+		if	@drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
-			firmware_file = Dir[ '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/*' + fw_customer_id.to_s.upcase + '*.vpkg' ][0]
+			firmware_file = Dir[ '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/*' + fw_type.to_s.upcase + '.vpkg' ][0]
 
 			unless File.exists?( firmware_file.to_s )
 
-				force_failure( category: 'file_not_found' , data: '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/*' + fw_customer_id.to_s.upcase + '*.vpkg' )
+				force_failure( category: 'file_not_found' , data: '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/*' + fw_type.to_s.upcase + '.vpkg' )
 			end
 
-		elsif	@drive_info[ :supplier ] == 'FADU'
+		elsif	@drive_info[ :product_architecture ].include?( 'FADU' )
 
-			firmware_file = Dir[ @test_info[ :local_fw_repo ] + firmware.to_s.upcase + '/*' + firmware.to_s + '*.bin' ][0]
+			firmware_file = Dir[ @test_info[ :local_fw_repo ] + firmware.to_s.upcase + '/' + firmware.to_s + '.??_' + fw_type.to_s.downcase + '.bin' ][0]
 
 			unless File.exists?( firmware_file.to_s )
 
-				force_failure( category: 'file_not_found' , data: '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/*' + firmware.to_s + '*.bin' )
+				force_failure( category: 'file_not_found' , data: '/home/everest/angel_fw_repo/' + firmware.to_s.upcase + '/' + firmware.to_s + '.??_' + fw_type.to_s.downcase + '.bin' )
 			end
 		end
 
@@ -3483,13 +3561,13 @@ class Functions
 
 		$angel.set_timeout( 'general' , @test_info[ :timeout_fwdl ] )
 
-		if	@drive_info[ :supplier ] == 'WDC'
+		if	@drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
 			first_fw_slot = 1 ; last_fw_slot = 4
 
 			if firmware_slot == nil ; firmware_slot = 1 ; end
 
-		elsif	@drive_info[ :supplier ] == 'FADU'
+		elsif	@drive_info[ :product_architecture ].include?( 'FADU' )
 
 			first_fw_slot = 0 ; last_fw_slot = 2
 
@@ -3503,8 +3581,7 @@ class Functions
 
 			if slot == firmware_slot ; commit = commit_action ; else ; commit = 0 ; end
 
-			# example : /home/everest/angel_bin/nvme-cli fw-download /dev/nvme0 --fw=/home/everest/angel_fw_repo/LC100015/coffeebay_AD.vpkg
-			cmd = '/home/everest/angel_bin/nvme-cli fw-download ' + @drive_info[ :ctrl_id ][0].to_s + ' --fw=' + firmware_file.to_s + ' 2>&1'
+			cmd = $test_info.home_directory + 'nvme-cli fw-download ' + @drive_info[ :ctrl_id ][0].to_s + ' --fw=' + firmware_file.to_s + ' ' + options.to_s + ' 2>&1'
 
 			f_log( [ 'FUNC' , cmd.to_s + "\n" ] )
 
@@ -3512,8 +3589,7 @@ class Functions
 
 			unless rc.downcase.include?( 'success' ) ; force_failure( category: 'firmware_download_failure' , data: cmd.to_s + ' : ' + rc.to_s ) ; end
 
-			# example : /home/everest/angel_bin/nvme-cli fw-commit /dev/nvme0 --slot=1 --action=3
-			cmd = '/home/everest/angel_bin/nvme-cli fw-commit ' + @drive_info[ :ctrl_id ][0].to_s + ' --slot=' + slot.to_s + ' --action=' + commit.to_s + ' 2>&1'
+			cmd = $test_info.home_directory + 'nvme-cli fw-commit ' + @drive_info[ :ctrl_id ][0].to_s + ' --slot=' + slot.to_s + ' --action=' + commit.to_s + ' 2>&1'
 
 			f_log( [ 'FUNC' , cmd.to_s + "\n" ] )
 
@@ -3811,6 +3887,8 @@ class Functions
 
 		unless @drive_info[ :drive_responsive ] == true ; return ; end
 
+		link_check()
+
 		# Populates @drive_info[ :sn ] , drive_info[ :fw ] , @drive_info[ :pn ] , @drive_info[ :capacity ] , @drive_info[ :max_lba ] , @drive_info[ :block_size ]
 		# Populates @drive_info[ :name_space_id_list ] & @drive_info[ :number_of_active_namespaces ]
 		nvme_identify()
@@ -3821,19 +3899,19 @@ class Functions
 
 		if @test_info[ :device_handle_error ] == true ; @drive_info[ :drive_responsive ] = false ; return ; end
 
-		_get_bus_link_rate()
-
-		_decode_fw_info()
+		_get_fw_qs()
 
 		get_log_page_C2h( log: log )
 
-		check_drive_security_level()
+		get_drive_security_level()
 
-		get_firmware_files( fw_version: @drive_info[ :fw ].to_s , fw_customer_id: @drive_info[ :fw_customer_id ].to_s , log: false )
+		get_firmware_files( fw_version: @drive_info[ :fw ].to_s , fw_type: @drive_info[ :fw_type ].to_s , log: false )
 
 		get_log_page_02h( log: log )
 
 		get_log_page_03h( log: log )
+
+		get_log_page_C0h_FADU( log: log )
 
 		get_log_page_C0h_MSFT( log: log )
 
@@ -3843,9 +3921,7 @@ class Functions
 
 		get_log_page_D0h_AWS( log: log )
 
-		if get_e6 == true && @test_info[ :get_e6 ] == true && @drive_info[ :supplier ] == 'WDC' ; get_e6( log: log ) ; end
-
-		if get_e6 == true && @test_info[ :get_e6 ] == true && @drive_info[ :supplier ] == 'FADU' ; get_fadu_telemetry_log( log: log ) ; end
+		if get_e6 == true ; get_e6( log: log ) ; end
 
 		# Populates @drive_info[ :gbb_count ] , @drive_info[ :nand_usage ]
 		get_parametric_data( log: log )
@@ -3888,15 +3964,9 @@ class Functions
 			end
 		end
 
-		fw_version = @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_customer_id ].to_s
-
-		if @drive_info[ :product_family ].to_s.upcase == @drive_info[ :fw_product_family ].to_s.upcase
-
-			f_log( [ 'INFO' , 'DRIVE' , 'PRODUCT FAMILY' , @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s.upcase ] )
-		else
-			f_log( [ 'INFO' , 'DRIVE' , 'PRODUCT FAMILY' , @drive_info[ :product_family ].to_s.upcase ] )
-		end
-
+		fw_version = @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s
+		
+		f_log( [ 'INFO' , 'DRIVE' , 'PRODUCT FAMILY'	, @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s.upcase ] )
 		f_log( [ 'INFO' , 'DRIVE' , 'FORM FACTOR'	, @drive_info[ :form_factor ].to_s ] )
 		f_log( [ 'INFO' , 'DRIVE' , 'SN'		, @drive_info[ :sn ].to_s ] )
 		f_log( [ 'INFO' , 'DRIVE' , 'SECURITY LEVEL'	, @drive_info[ :security_level ].to_s ] )
@@ -3915,7 +3985,7 @@ class Functions
 		f_log( [ 'INFO' , 'DRIVE' , 'POH'		, @drive_info[ :power_on_hours ].to_s ] )
 		f_log( [ 'INFO' , 'DRIVE' , 'NAND USAGE'	, @drive_info[ :nand_usage ].to_s + ' %' ] )
 
-		if @drive_info[ :product_architecture ] == 'FADU' 
+		if @drive_info[ :product_architecture ].include?( 'FADU' )
 
 			f_log( [ 'INFO' , 'DRIVE' , 'SINGLE BIT ERRORS'	, 'DRAM ' + @drive_info[ :dram_single_bit_error_count ].to_i.to_s ] )
 		else
@@ -4242,24 +4312,13 @@ class Functions
 		cmd = 'scp ' + file.to_s + ' everest@192.0.0.254:' + destination.to_s
 
 		rc = %x( #{ cmd } )
-
-=begin
-
-		begin
-			Timeout::timeout(300) { Net::SCP.upload!( '192.0.0.254' , 'everest' , file.to_s , destination.to_s , :ssh => { :password => 'everest' } ) }
-
-		rescue StandardError => error
-
-			_warning_counter( category: 'scp_error' , data: error.to_s )
-		end
-=end
 	end
 
-	def check_drive_security_level()
+	def get_drive_security_level()
 
-		return unless @drive_info[ :supplier ] == 'WDC'
+		return unless @drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
-		cmd = '/home/everest/angel_bin/securedrivekit ' + @drive_info[ :ctrl_id ][0].to_s + ' sdcmd returnstate'
+		cmd = $test_info.home_directory + 'securedrivekit ' + @drive_info[ :ctrl_id ][0].to_s + ' sdcmd returnstate'
 
 		data = ( %x( #{ cmd } ) ).split( 'Security Level' )[-1].split( '(' )[1].split( ')' )[0]
 
@@ -4741,15 +4800,15 @@ class Functions
 		return clean_data
 	end
 
-	def get_firmware_files( dir: $fw_repo , fw_version: nil , fw_customer_id: nil , log: true )
+	def get_firmware_files( dir: $fw_repo , fw_version: nil , fw_type: nil , log: true )
 
 		if dir[-1] != '/' ; dir += '/' ; end
 
-		_get_firmware_file( dir: dir , fw_version: fw_version , fw_customer_id: fw_customer_id , log: log )
+		_get_firmware_file( dir: dir , fw_version: fw_version , fw_type: fw_type , log: log )
 
-		if	@drive_info[ :supplier ] == 'WDC'
+		if @drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
-			_get_counters_handler_xml( dir: dir , fw_version: fw_version , fw_customer_id: fw_customer_id )
+			_get_counters_handler_xml( dir: dir , fw_version: fw_version , fw_type: fw_type )
 		end
 	end
 
@@ -4905,7 +4964,7 @@ class Functions
 						f_log( [ 'FUNC' , 'GET LOG PAGE' , type.to_s , filename.to_s ] )
 					end
 
-					if @drive_info[ :supplier ] == 'WDC' ; log() ; end
+					unless @drive_info[ :product_architecture ].include?( 'FADU' ) ; log() ; end
 
 				rescue StandardError => error
 
@@ -5043,9 +5102,9 @@ class Functions
 
 				firmware = yaml_data[ @tester_info[ :tester_id ] ][ 'firmware' ].to_s
 
-				fw_customer_id = yaml_data[ @tester_info[ :tester_id ] ][ 'fw_customer_id' ].to_s
+				fw_type = yaml_data[ @tester_info[ :tester_id ] ][ 'fw_type' ].to_s
 
-				if fw_customer_id.to_s == 'nil' ; fw_customer_id = nil ; end
+				if fw_type.to_s == 'nil' ; fw_type = nil ; end
 
 				date = yaml_data[ @tester_info[ :tester_id ] ][ 'date' ].to_s
 
@@ -5062,7 +5121,7 @@ class Functions
 
 				f_log( [ 'INFO' , 'FIRMWARE UPDATE REQUEST DETECTED' + "\n" ] )
 
-				firmware_download_nvme_cli( firmware: firmware , fw_customer_id: fw_customer_id , power_cycle: power_cycle , commit_action: commit_action , firmware_slot: 1 )
+				firmware_download_nvme_cli( firmware: firmware , fw_type: fw_type , power_cycle: power_cycle , commit_action: commit_action , firmware_slot: 1 )
 			end
 		end
 	end
@@ -5208,10 +5267,6 @@ class Functions
 
 		@drive_info[ :dram_single_bit_error_count ] = fadu_csv_info[ 'sec_count_total' ]
 
-		@drive_info[ :fw_customer_id ] = 'XX'
-
-		@drive_info[ :fw_feature_set ] = 'XX'
-
 		@inspector_info[ :fadu_log_pages ][ '0xCA' ][ inspector_date_time_stamp.to_s ] = fadu_csv_info
 	end
 
@@ -5219,7 +5274,7 @@ class Functions
 
 		_get_parametric_offsets()
 
-		filename = 'ANGEL_3E_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
+		filename = 'ANGEL_3E_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.bin'
 
 		if log == true ; f_log( [ 'FUNC' , 'GET LOG PAGE' , '3E' , filename.to_s ] ) ; end
 
@@ -5499,42 +5554,38 @@ class Functions
 		end
 	end
 
-	def _get_firmware_file( dir: nil , fw_version: nil , fw_customer_id: nil , log: false )
+	def _get_firmware_file( dir: nil , fw_version: nil , fw_type: nil , log: false )
 
-		if	@drive_info[ :supplier ] == 'WDC'
+		if	@drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
-			local_repo_fw_file = Dir[ @test_info[ :local_fw_repo ] + fw_version.to_s.upcase + '/*' + fw_customer_id.to_s + '.vpkg' ][0]
+			local_repo_fw_file = Dir[ @test_info[ :local_fw_repo ] + fw_version.to_s.upcase + '/*' + fw_type.to_s + '.vpkg' ][0]
 
-		elsif	@drive_info[ :supplier ] == 'FADU'
+		elsif	@drive_info[ :product_architecture ].include?( 'FADU' )
 
-			local_repo_fw_file = Dir[ @test_info[ :local_fw_repo ] + fw_version.to_s.upcase + '/*' + fw_version.to_s + '*.bin' ][0]
+			local_repo_fw_file = Dir[ @test_info[ :local_fw_repo ] + fw_version.to_s.upcase + '/' + fw_version.to_s + '.??_' + @drive_info[ :fw_type ].downcase + '.bin' ][0]
 
-			local_repo_fadu_c_logan_file = Dir[ @test_info[ :local_fw_repo ] + fw_version.to_s.upcase + '/*' + fw_version.to_s + '*c_logan' ][0]
+			local_repo_fadu_c_logan_file = Dir[ @test_info[ :local_fw_repo ] + fw_version.to_s.upcase + '/' + fw_version.to_s + '.??_' + @drive_info[ :fw_type ].downcase + '_c_logan' ][0]
 		end
 
-		if	@drive_info[ :supplier ] == 'WDC' && File.exists?( local_repo_fw_file.to_s )
+		if	( @drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD' ) && File.exists?( local_repo_fw_file.to_s )
 
 			return
 
-		elsif	@drive_info[ :supplier ] == 'FADU' && File.exists?( local_repo_fw_file.to_s ) && File.exists?( local_repo_fadu_c_logan_file.to_s )
+		elsif	@drive_info[ :product_architecture ].include?( 'FADU' ) && File.exists?( local_repo_fw_file.to_s ) && File.exists?( local_repo_fadu_c_logan_file.to_s )
 
 			return
 		else
-			if	@drive_info[ :supplier ] == 'WDC'
+			if	@drive_info[ :product_architecture ] == 'SNOWBIRD' || @drive_info[ :product_architecture ] == 'THUNDERBIRD'
 
-				cmd = 'ls ' + dir.to_s + fw_version.to_s.upcase + '/*' + fw_customer_id.to_s.upcase + '*.vpkg'
+				cmd = 'ls ' + dir.to_s + fw_version.to_s.upcase + '/*' + fw_type.to_s.upcase + '*.vpkg'
 
-			elsif	@drive_info[ :supplier ] == 'FADU'
+			elsif	@drive_info[ :product_architecture ].include?( 'FADU' )
 
-				 cmd = 'ls ' + dir.to_s + fw_version.to_s.upcase + '/*' + fw_version.to_s + '*c_logan*'
+				 cmd = 'ls ' + dir.to_s + fw_version.to_s.upcase + '/' + fw_version.to_s + '.??_' + @drive_info[ :fw_type ].downcase + '_c_logan*'
 
 				 return_data = ( ssh( cmd: cmd.to_s ) ).split( "\n" )[0]
 
-				if      return_data == nil
-
-					_warning_counter( category: 'file_not_found' , data: 'C_LOGAN FILE NOT FOUND IN ' + dir.to_s + fw_version.to_s + '/' )
-
-                	        elsif   return_data.include?( 'No such file or directory' ) || return_data == nil
+                	        if	return_data == nil || return_data.include?( 'No such file or directory' )
 
 					_warning_counter( category: 'file_not_found' , data: 'C_LOGAN FILE NOT FOUND IN ' + dir.to_s + fw_version.to_s + '/' )
 				else
@@ -5548,13 +5599,13 @@ class Functions
 
 					if return_data == ''
 
-						if log == true ; f_log( [ 'INFO' , 'C_LOGAN FILE COPIED TO LOCAL FW REPO' , destination.to_s + ( fw_file.split( '/' ) )[-1] + "\n" ] ) ; end
+						if log == true ; f_log( [ 'INFO' , 'C_LOGAN FILE COPIED TO LOCAL FW REPO' , destination.to_s + "\n" ] ) ; end
 					else
 						force_failure( category: 'file_copy_failure' , data: return_data.inspect )
 					end
 				end
 
-				cmd = 'ls ' + dir.to_s + fw_version.to_s.upcase + '/*.bin' 
+				cmd = 'ls ' + dir.to_s + fw_version.to_s.upcase + '/' + fw_version.to_s.upcase + '.??_' + @drive_info[ :fw_type ].downcase + '.bin'
 			end
 
 			return_data = ( ssh( cmd: cmd.to_s ) ).split( "\n" )[0]
@@ -5587,7 +5638,7 @@ class Functions
 		end
 	end
 
-	def _get_counters_handler_xml( dir: nil , fw_version: nil , fw_customer_id: nil )
+	def _get_counters_handler_xml( dir: nil , fw_version: nil , fw_type: nil )
 
 		local_repo_counters_handler_xml = @test_info[ :local_fw_repo ] + fw_version.to_s.upcase + '/countershandler.xml'
 
@@ -5744,7 +5795,7 @@ class Functions
 
 	def _fadu_csv()
 
-		return if @inspector_info[ :fadu_log_pages ][ '0xCA' ].count == 0 && @inspector_info[ :fadu_log_pages ][ '0x02' ].count == 0
+		return if @inspector_info[ :fadu_log_pages ][ '0xCA' ].count == 0 && @inspector_info[ :fadu_log_pages ][ '0x02' ].count == 0 && @inspector_info[ :fadu_log_pages ][ '0xC0' ].count == 0
 
 		filename = @test_info[ :script_name ].to_s.upcase + '-' + @test_info[ :test_phase ].to_s.upcase + '_' + @drive_info[ :sn ].to_s + '_' + @test_info[ :start_time ].strftime( "%Y%m%d-%H%M%S" ).to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '_parsedData.csv'
 
@@ -5780,6 +5831,20 @@ class Functions
 			 @inspector_info[ :fadu_log_pages ][ '0x02' ].clear
 		end
 
+		@inspector_info[ :fadu_log_pages ][ '0xC0' ].each_key do |date_time|
+
+			@inspector_info[ :fadu_log_pages ][ '0xC0' ][ date_time.to_s ].each_key do |key|
+
+				value = @inspector_info[ :fadu_log_pages ][ '0xC0' ][ date_time.to_s ][ key.to_s ]
+		
+				data = key.to_s.downcase + ',' + value.to_s + "\n"
+
+				rc = $angel.log.write_file( $test_info.home_directory + filename.to_s , data.to_s , 'a' )
+			end
+
+			 @inspector_info[ :fadu_log_pages ][ '0xC0' ].clear
+		end
+
 		@test_logs[ :fadu_data_files ].push( filename.to_s )
 
 		unless @test_info[ :status ] == 'testing' ; log() ; end
@@ -5791,7 +5856,7 @@ class Functions
 
 		if	@test_logs[ :inspector ] == nil
 
-			filename = 'ANGEL_INSPECTOR-DATA_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.csv'
+			filename = 'ANGEL_INSPECTOR-DATA_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + @drive_info[ :sn ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.csv'
 
 			@test_logs[ :inspector ] = filename
 
@@ -5825,7 +5890,7 @@ class Functions
 				current_link_rate = @drive_info[ :current_link_speed ][1].to_s + '.' + @drive_info[ :current_link_width ][0].to_s + ':' + @drive_info[ :current_link_speed ][1].to_s + '.' + @drive_info[ :current_link_width ][1].to_s
 			end
 
-			data_array = [ @inspector_info[ :instance_counter ].to_s , script_name , @test_info[ :start_time ].to_s[0..-7].to_s , @test_info[ :slot_id ].to_s , 'ANGEL' , @test_info[ :angel_package ].to_s , 'NVME' , current_link_rate.to_s , script_name + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw_feature_set ].to_s.upcase + '_' + @drive_info[ :fw_customer_id ].to_s + '_' + @test_info[ :test_phase ].to_s.upcase , @drive_info[ :pn ].to_s , @drive_info[ :capacity ].to_s , @drive_info[ :fw ].to_s , @drive_info[ :block_size ].to_s , @drive_info[ :sn ].to_s ]
+			data_array = [ @inspector_info[ :instance_counter ].to_s , script_name , @test_info[ :start_time ].to_s[0..-7].to_s , @test_info[ :slot_id ].to_s , 'ANGEL' , @test_info[ :angel_package ].to_s , 'NVME' , current_link_rate.to_s , script_name + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :fw_qs ].to_s.upcase + '_' + @drive_info[ :fw_type ].to_s + '_' + @test_info[ :test_phase ].to_s.upcase , @drive_info[ :pn ].to_s , @drive_info[ :capacity ].to_s , @drive_info[ :fw ].to_s , @drive_info[ :block_size ].to_s , @drive_info[ :sn ].to_s ]
 
 			counter = 0
 
@@ -5998,15 +6063,11 @@ class Functions
 		# This should stop Angel from going No Response During non-Angel commands
 		$angel.check_instruction
 
-		angel_host_logs = Dir[ '/home/everest/angel_host/bin/log/*' ]
+		date = Time.now.strftime( "%Y%m%d" )
 
-		start_date = @test_info[ :start_time ].to_s.split( /\s+/ )[0].gsub( '-' , '' )
+		angel_host_logs = Dir[ '/home/everest/angel_host/bin/log/*' + date.to_s + '*' ]
 
 		angel_host_logs.each do |file|
-
-	 		date_stamp = file.split( '_' )[-1]
-
-			next unless date_stamp >= start_date
 
 			begin
 				FileUtils.copy( file , $test_info.home_directory ) if File.exists?( file )
@@ -6149,7 +6210,11 @@ class Functions
 		# This should stop Angel from going No Response During non-Angel commands
 		$angel.check_instruction
 
-		start_time_epoch = ( _time_to_epoch( time: @test_info[ :start_time ] ) - 120 )
+		time = Time.new()
+
+		date1 = time.strftime( "%b " ) + time.day.to_s.rjust(2)
+
+		date2 = time.strftime( "%b " ) + ( time.day - 1 ).to_s.rjust(2)
 
 		begin
 			syslog_in.each do |line|
@@ -6159,19 +6224,11 @@ class Functions
 
 				line.chomp!
 
-				( date , time , text ) = line.split( /\s+/ , 3 )
+				next if line == nil
 
-				next if text == nil
+				next unless ( line.include?( date1.to_s ) || line.include?( date2.to_s ) )
 
-				date.gsub!( '/' , '-' )
-
-				date_time = date + ' ' + time
-
-				date_time_stamp_epoch = _time_stamp_to_epoch( timestamp: date_time.to_s )
-
-				next unless date_time_stamp_epoch >= start_time_epoch
-
-				syslog_out.write( date_time.to_s + ' ' + text + "\n" )
+				syslog_out.write( line + "\n" )
 
 				# This should stop Angel from going No Response During non-Angel commands
 				$angel.check_instruction
@@ -6224,7 +6281,7 @@ class Functions
 
 		unless @test_info[ :enable_parametrics ] == true ; return ; end
 
-		fw_version = bin_file.split( '_' )[ -3 ]
+		fw_version = bin_file.split( '_' )[ -3 ].split( '-' )[0]
 
 		counters_handler_file = '/home/everest/angel_fw_repo/' + fw_version.to_s.upcase + '/countershandler.xml'
 
@@ -6372,7 +6429,7 @@ class Functions
 
 			if @drive_info[ :data_current ] == true ; data_state = 'CURRENT' ; else ; data_state = 'STALE' ; end
 
-			data = [ $test_info.start_script.to_s , date.to_s , time.to_s , @test_info[ :slot_id ].to_s , @tester_info[ :kernel_release ].to_s , @tester_info[ :driver_version ].to_s , @test_info[ :test_phase ].to_s.upcase , @test_info[ :port_configuration ].to_s , @tester_info[ :ifc_type ].to_s + ' GEN' + @tester_info[ :pci_gen ].to_s , @drive_info[ :product_family ].to_s.upcase , @drive_info[ :pn ].to_s , @drive_info[ :model ].to_s , @drive_info[ :product_name ].to_s , @drive_info[ :sn ].to_s , @drive_info[ :fw ].to_s , @drive_info[ :tmm_version ].to_s , @drive_info[ :capacity ].to_s , @drive_info[ :block_size ].to_s , @drive_info[ :nand_usage ].to_s , @drive_info[ :gbb_count ].to_s , $test_status.operation_count.to_s , $test_status.read_bytes.to_s , $test_status.write_bytes.to_s , @drive_info[ :power_on_hours ].to_s , status.to_s.upcase , data_state , @test_info[ :test_mode ].to_s , 'NULL' , @test_info[ :power_cycle_count ].to_s , '00:00:00' , drive_temp.to_s , 'NULL' , 'NULL' , 'NULL' , 'NA' , 'NA' , 'NA' , 'NA' , 'NA' , 'NA' , 'NA' , 'NULL' , comment , ptl_lib_versions , angel_versions_data , 'NULL' , 'NULL' , 'NULL' , 'NULL' , @drive_info[ :customer ].to_s , @drive_info[ :fw_feature_set ].to_s ]
+			data = [ $test_info.start_script.to_s , date.to_s , time.to_s , @test_info[ :slot_id ].to_s , @tester_info[ :kernel_release ].to_s , @tester_info[ :driver_version ].to_s , @test_info[ :test_phase ].to_s.upcase , @test_info[ :port_configuration ].to_s , @tester_info[ :ifc_type ].to_s + ' GEN' + @tester_info[ :pci_gen ].to_s , @drive_info[ :product_family ].to_s.upcase , @drive_info[ :pn ].to_s , @drive_info[ :model ].to_s , @drive_info[ :product_name ].to_s , @drive_info[ :sn ].to_s , @drive_info[ :fw ].to_s , @drive_info[ :tmm_version ].to_s , @drive_info[ :capacity ].to_s , @drive_info[ :block_size ].to_s , @drive_info[ :nand_usage ].to_s , @drive_info[ :gbb_count ].to_s , $test_status.operation_count.to_s , $test_status.read_bytes.to_s , $test_status.write_bytes.to_s , @drive_info[ :power_on_hours ].to_s , status.to_s.upcase , data_state , @test_info[ :test_mode ].to_s , 'NULL' , @test_info[ :power_cycle_count ].to_s , '00:00:00' , drive_temp.to_s , 'NULL' , 'NULL' , 'NULL' , 'NA' , 'NA' , 'NA' , 'NA' , 'NA' , 'NA' , 'NA' , 'NULL' , comment , ptl_lib_versions , angel_versions_data , 'NULL' , 'NULL' , 'NULL' , 'NULL' , @drive_info[ :customer ].to_s , @drive_info[ :fw_qs ].to_s ]
 
 			# Reduces the data arrary if the databse does not have the new fields due to tests in process
 			# @sql_info[ :number_of_fields ] includes the record id , the data arrary does not
@@ -6533,7 +6590,7 @@ class Functions
 			end
 		end
 
-		filename = 'ANGEL_DATA_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :sn ].to_s + '_' + @drive_info[ :fw ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.dump'
+		filename = 'ANGEL_DATA_' + @test_info[ :test_phase ].to_s.upcase + '_' + @test_info[ :script_name ].to_s.upcase + '_' + @drive_info[ :product_family ].to_s.upcase + '_' + @drive_info[ :sn ].to_s + '_' + @drive_info[ :fw ].to_s + '-' + @drive_info[ :fw_type ].to_s + '_' + ( Time.now.strftime( "%Y%m%d-%H%M%S" ) ).to_s + '.dump'
 
 		# $angel.shared.p_latest_error_info_ replaces $error_data
 
@@ -6627,7 +6684,7 @@ class Functions
 
 		sub_power_board_fw_version = ( $power.get_card_version ).split( "\s" )[2]
 
-		if @drive_info[ :product_architecture ] == 'FADU'
+		if @drive_info[ :product_architecture ].include?( 'FADU' )
 
 			single_bit_errors = 'DRAM ' + @drive_info[ :dram_single_bit_error_count ].to_i.to_s
 
@@ -6653,12 +6710,12 @@ class Functions
 				'nvme_rc'		=>	@error_info[ :nvme_rc ].to_s ,
 				'ioctl_rc'		=>	@error_info[ :ioctl_rc ].to_s ,
 				'failure_info'		=>	@error_info[ :script_failure_info ].to_s ,
-				'family'		=>	@drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_feature_set ].to_s.upcase ,
+				'family'		=>	@drive_info[ :product_family ].to_s.upcase + '-' + @drive_info[ :fw_qs ].to_s.upcase ,
 				'ifc_type'		=>	ifc_type.to_s ,
 				'pc_count'		=>	@test_info[ :power_cycle_count ].to_s ,
 				'ungraceful_pc_count'	=>	@test_info[ :ungraceful_power_cycle_count ].to_s ,
 				'power_fw_ver'		=>	sub_power_board_fw_version.to_s ,
-				'fw_customer_id'	=>	@drive_info[ :fw_customer_id ].to_s ,
+				'fw_type'	=>	@drive_info[ :fw_type ].to_s ,
 				'customer'		=>	@drive_info[ :customer ].to_s ,
 				'dwpd'			=>	average_drive_writes_per_day.to_s ,
 				'uecc_errors'		=>	@drive_info[ :uecc_error_count ].to_s ,
@@ -6818,7 +6875,6 @@ class Functions
 
 		@error_info[ :pending_failure_info ] = __method__.to_s
 
-		#@drive_info[ :max_link_rate ] = []
 		@drive_info[ :max_link_speed ] = []
 		@drive_info[ :max_link_width ] = []
 
@@ -6846,13 +6902,9 @@ class Functions
 
 			max_link_width = return_data[0].to_s
 
-			#max_link_rate = return_data[1].to_s + '.' + return_data[0].to_s
-
 			@drive_info[ :max_link_speed ].push( max_link_speed )
 
 			@drive_info[ :max_link_width ].push( max_link_width )
-
-			#@drive_info[ :max_link_rate ].push( max_link_rate.to_f )
 
 			begin
 				counter ||= 0
@@ -6874,12 +6926,8 @@ class Functions
 
 			current_link_width = return_data[0].to_s
 
-			#current_link_rate = return_data[1].to_s + '.' + return_data[0].to_s
-
 			@drive_info[ :current_link_speed ].push( current_link_speed )
 			@drive_info[ :current_link_width ].push( current_link_width )
-
-			#@drive_info[ :current_link_rate ].push( current_link_rate.to_f )
 		end
 
 		@error_info[ :pending_failure_info ] = 'NA'
@@ -7077,7 +7125,7 @@ class Functions
 		if @test_info[ :parametric_offsets ].key?( 'FFFF' ) && @test_info[ :parametric_offsets ][ 'FFFF' ][ 'name' ] == 'eyecatcher' ; @test_info[ :check_eyecatcher ] = true ; end
 	end
 
-	# Populates @drive_info[ :bus_path ] , @drive_info[ :bus_id ] , @drive_info[ :device_id ] , @drive_info[ :product_family ] , @drive_info[ :supplier ]
+	# Populates @drive_info[ :bus_path ] , @drive_info[ :bus_id ] , @drive_info[ :device_id ] , @drive_info[ :product_family ] , @drive_info[ :product_architecture ]
 	def _get_bus_path()
 
 		core_log = $test_info.home_directory + 'core.log'
@@ -7128,19 +7176,42 @@ class Functions
 
 		if @external_data_tables[ :device_id_list ].has_key?( device_id.to_s )
 
-			@drive_info[ :product_family ] = @external_data_tables[ :device_id_list ][ device_id.to_s ][ 'product_family' ].to_s
+			@drive_info[ :product_architecture ] = @external_data_tables[ :device_id_list ][ device_id.to_s ][ 'product_architecture' ].to_s
 
-			@drive_info[ :supplier ] = @external_data_tables[ :device_id_list ][ device_id.to_s ][ 'supplier' ].to_s
+			@drive_info[ :product_family ] = @external_data_tables[ :device_id_list ][ device_id.to_s ][ 'product_family' ].to_s
 		else
 			force_failure( category: 'external_data_file_error' , data: device_id_list.to_s + ' : ' + device_id.to_s )
 		end
 
-		if @drive_info[ :product_family ] == '' || @drive_info[ :supplier ] == ''
+		if @drive_info[ :product_family ] == ''
 
 			force_failure( category: 'external_data_file_error' , data: device_id_list.to_s + ' : ' + device_id.to_s )
 		end
 
+		if @drive_info[ :product_architecture ].include?( 'FADU' )
+
+			@drive_info[ :fw_device_id ] = @drive_info[ :product_architecture ] 
+		end
+
 		@drive_info[ :device_id ] = device_id
+	end
+
+	def _get_fw_qs()
+
+		# https://confluence.wdc.com/pages/viewpage.action?spaceKey=SSDFW&title=Firmware+Versioning
+		if	@drive_info[ :product_family ].to_s.downcase == 'borabora'
+
+			if	@drive_info[ :fw ][2].to_s == '1'
+
+				@drive_info[ :fw_qs ] = 'CONV'
+
+			elsif	@drive_info[ :fw ][2].to_s == 'Z'
+
+				 @drive_info[ :fw_qs ] = 'ZNS'
+			end
+		else
+			@drive_info[ :fw_qs ] = 'QS' + @drive_info[ :fw ][2].to_s
+		end
 	end
 
 	def _verify_device_handle()
@@ -7212,54 +7283,31 @@ class Functions
 		end
 	end
 
-	def _decode_fw_info()
 
-		# https://confluence.wdc.com/pages/viewpage.action?spaceKey=SSDFW&title=Firmware+Versioning
-		fw_version_decoder = $test_info.home_directory.to_s + 'fw-version-decoder.yaml'
-
-		if @external_data_tables[ :fw_version_decoder ].empty?()
-
-			unless File.file?( fw_version_decoder ) ; force_failure( category: 'file_not_found' , data: fw_version_decoder.to_s ) ; end
-
-			@external_data_tables[ :fw_version_decoder ] = YAML.load( File.read( fw_version_decoder ) )
-		end
-
-		@drive_info[ :fw_product_family ] = @external_data_tables[ :fw_version_decoder ][ 'product_family' ][ @drive_info[ :fw ][1].to_s ].to_s
-
-		if @drive_info[ :fw_product_family ] == 'aspen' && @drive_info[ :product_family ].downcase !~ /aspen/ ; @drive_info[ :fw_product_family ] = 'SMOKE-BUILD' ; end
-
-		if	@drive_info[ :fw_product_family ].to_s.downcase == 'borabora'
-
-			if @drive_info[ :fw ][2].to_s == '1' ; @drive_info[ :fw_feature_set ] = 'CONV' ; elsif @drive_info[ :fw ][2].to_s == 'Z' ; @drive_info[ :fw_feature_set ] = 'ZNS' ; end
-
-		# Hack for COFFEEBAY_HP as program is not following FW versioning guidelines
-		elsif	@drive_info[ :fw_product_family ].to_s.upcase == 'COFFEEBAY_HP'	
-
-			@drive_info[ :fw_feature_set ] = 'QS3'
-		else
-			@drive_info[ :fw_feature_set ] = 'QS' + @drive_info[ :fw ][2].to_s
-		end
-	end
-
-	def _decode_fw_customer_id( id: nil )
+	def _get_customer_info( id: nil )
 
 		# Information Is From Security Roadmap and Requirements Summary.xlsx ( https://wdc.app.box.com/folder/87561046914?s=2fhn9pndl3knrge1red8ma5ejb1wa958 )
-		fw_customer_id_file = $test_info.home_directory.to_s + 'c2-fw-customer-ids.yaml'
+		customer_id_list = $test_info.home_directory.to_s + 'customer-id-list.yaml'
 
 		if @external_data_tables[ :customer_id_table ].empty?()
 
-			unless File.file?( fw_customer_id_file ) ; force_failure( category: 'file_not_found' , data: fw_customer_id_file.to_s ) ; end
+			unless File.file?( customer_id_list.to_s ) ; force_failure( category: 'file_not_found' , data: customer_id_list.to_s ) ; end
 
-			@external_data_tables[ :customer_id_table ] = YAML.load( File.read( fw_customer_id_file ) )
+			@external_data_tables[ :customer_id_table ] = YAML.load( File.read( customer_id_list.to_s ) )
 		end
 
 		if @external_data_tables[ :customer_id_table ].key?( id.to_s )
 
 			@drive_info[ :customer ] = @external_data_tables[ :customer_id_table ][ id.to_s ][ 'cust' ]
 
-			@drive_info[ :fw_customer_id ] = @external_data_tables[ :customer_id_table ][ id.to_s ][ 'fw-id' ]
+			if	@drive_info[ :product_architecture ].include?( 'FADU' )
+
+				get_log_page_C2h_FADU()
+			else
+				@drive_info[ :fw_type ] = @external_data_tables[ :customer_id_table ][ id.to_s ][ 'fw-id' ]
+			end
 		else
-			_warning_counter( category: 'external_data_file_error' , data: 'UPDATE : ' + fw_customer_id_file + ' ( id : ' + id.to_s + ' )' )
+			_warning_counter( category: 'external_data_file_error' , data: 'UPDATE : ' + customer_id_list.to_s + ' ( id : ' + id.to_s + ' )' )
 		end
 	end
 
@@ -7334,6 +7382,8 @@ class Functions
 			if abort_reason == '' ; abort_reason = 'UNKOWN' ; end
 		end
 
+		log()
+
 		f_log( [ 'INFO' , 'TEST ABORTED' , 'ABORT REASON' , abort_reason.to_s.upcase + "\n" ] )
 	end
 
@@ -7388,6 +7438,8 @@ class Functions
 
 		angel_trace = error_info.script_information_.to_s
 
+		log()
+
 		f_log( [ 'INFO' , 'ANGEL TRACE' , angel_trace.to_s + "\n" ] )
 
 		f_log( [ 'INFO' , 'RUBY TRACE' + "\n" +  @error_info[ :trace ].to_s + "\n" ] )
@@ -7412,8 +7464,6 @@ class Functions
 			@error_info[ :cmd_time	] = ( error_info.command_elapsed_time_ / 1000000 ).to_s
 			@error_info[ :nvme_cmd	] = error_info.get_error_command_string
 			@error_info[ :pfcode	] = error_info.pf_code_.to_s
-
-			#unless @error_info[ :category ].downcase == 'file_not_found' ; @error_info[ :script_failure_info ] = @error_info[ :script_failure_info ].to_s.upcase ; end
 
 			@error_info[ :script_failure_info ].to_s.gsub!( /"/ , '' )
 
