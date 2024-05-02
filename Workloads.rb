@@ -3,7 +3,7 @@ require 'Functions'
 
 class Workloads < Functions
 
-	VERSION = 10.1
+	VERSION = 10.2
 
 	# TO LOG DEBUG OUTPUT FOR THIS LIBRARY SET DEBUG_LEVEL TO -2
 	def initialize()
@@ -573,8 +573,6 @@ class Workloads < Functions
 
 		unless rc == 0 ; force_failure( category: 'nvme_device_cleanup_failure' , data: rc.inspect ) ; end
 
-		@core.close_handle
-
 		loop do
 			$angel.check_instruction
 
@@ -783,6 +781,8 @@ class Workloads < Functions
 			seq_w( start_lba: start_lba , end_lba: end_lba , blocks_per_io: blocks_per_io )
 
 			break if Time.now >= ( start_time + runtime )
+
+			sleep 1
 
 			seq_r( start_lba: start_lba , end_lba: end_lba , blocks_per_io: blocks_per_io , compare: compare )
 
