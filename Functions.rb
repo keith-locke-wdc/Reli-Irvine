@@ -1,7 +1,7 @@
 
 class Functions
 
-	VERSION = 10.7
+	VERSION = 10.8
 
 	# TO LOG DEBUG OUTPUT FOR THIS LIBRARY SET DEBUG_LEVEL TO -1
 	def initialize()
@@ -3404,8 +3404,6 @@ class Functions
 		$angel.set_timeout( 'general' , @test_info[ :timeout_general ] )
 
 		@test_info[ :parametric_offsets ] = nil
-
-		log()
 
 		@test_info[ :parametric_offsets ] = nil
 
