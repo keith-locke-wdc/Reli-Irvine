@@ -1,5 +1,5 @@
 
-VERSION = 5.0
+VERSION = 6.0
 
 def main()
 
@@ -15,16 +15,16 @@ def main()
 	# angel ( sends custom nvme commands via library ) or nvme-cli ( uses nvme-cli )
 	method = 'nvme-cli'
 
-	# This is only required if changing fw_customer_id ( i.e. MS to MT )
-	fw_customer_id = 'NQ'
+	# This is only required if changing fw_type ( i.e. MS to MT )
+	fw_type = 'NQ'
 
 	$ANGEL.get_log_page_03h()
 
 	if method == 'angel'
 
-		$ANGEL.dev_prep_p( firmware: firmware , fw_customer_id: fw_customer_id , format: block_size , wait: wait )
+		$ANGEL.dev_prep_p( firmware: firmware , fw_type: fw_type , format: block_size , wait: wait )
 	else
-		$ANGEL.dev_prep_p_nvme_cli( firmware: firmware , fw_customer_id: fw_customer_id , format: block_size , wait: wait )
+		$ANGEL.dev_prep_p_nvme_cli( firmware: firmware , fw_type: fw_type , format: block_size , wait: wait )
 	end
 
 	$ANGEL.get_log_page_03h()
